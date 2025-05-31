@@ -5,7 +5,7 @@ import WebSocket from "ws";
 import fs from "fs";
 
 /**
- * @typedef {Object} Note
+ * @typedef {Object} Note - Represents a note in Misskey
  * @property {string} id - The unique identifier of the note
  * @property {string} text - The content of the note
  * @property {string} userId - The ID of the user who created the note
@@ -18,13 +18,99 @@ import fs from "fs";
  */
 
 /**
- * @typedef {Object} User
+ * @typedef {Object} User - Represents a user in Misskey
  * @property {string} id - The unique identifier of the user
  * @property {string|null} name - The username of the user
  * @property {string} username - The username of the user
  * @property {string} host - The host of the user
  * @property {*} [key] - Additional properties that may be present in the user object
  */
+
+/**
+ * @typedef {Object} LLMRequestPayload - The request payload for LLM API calls
+ * @property {Array<{role: string, content: string}>} messages - Array of conversation messages
+ * @property {string} [model] - The model to use (can be overridden by function logic)
+ * @property {number} [temperature] - Controls randomness in responses (0.0 to 2.0)
+ * @property {number} [max_tokens] - Maximum number of tokens in the response
+ * @property {boolean} [stream] - Whether to stream the response
+ * @property {*} [key] - Additional properties that may be present in the payload
+ */
+
+/**
+ * @typedef {Object} LLMResponse - The response object from LLM API endpoints (Axios response structure)
+ * @property {Object} data - The response data from the LLM API
+ * @property {Array<Object>} [data.choices] - Array of response choices from the LLM
+ * @property {Object} [data.choices[].message] - Message object containing the response
+ * @property {string} [data.choices[].message.content] - The generated text content
+ * @property {string} [data.choices[].message.role] - The role of the response (usually "assistant")
+ * @property {Object} [data.usage] - Token usage information
+ * @property {number} [data.usage.prompt_tokens] - Number of tokens in the prompt
+ * @property {number} [data.usage.completion_tokens] - Number of tokens in the completion
+ * @property {number} [data.usage.total_tokens] - Total number of tokens used
+ * @property {number} status - HTTP status code of the response
+ * @property {string} statusText - HTTP status text
+ * @property {Object} headers - HTTP response headers
+ * @property {Object} config - Axios request configuration used
+ * @property {*} [key] - Additional properties that may be present in the response
+ */
+
+/**
+ * Get terminal width with fallback
+ * @returns {number} Terminal width in columns
+ */
+function getTerminalWidth() {
+  return process.stdout.columns || 80; // Default to 80 if not available
+}
+
+/**
+ * Word wrap text to fit terminal width
+ * @param {string} text - Text to wrap
+ * @param {string} prefix - Prefix for each line (e.g., "💬 Reply: ")
+ * @param {number?} maxWidth - Maximum width (defaults to terminal width)
+ * @returns {string} Wrapped text
+ */
+function wrapText(text, prefix = '', maxWidth = null) {
+  if (!maxWidth) maxWidth = getTerminalWidth();
+  if (!text) return text;
+
+  // Calculate available width after prefix
+  const availableWidth = maxWidth - prefix.length;
+
+  // If text is shorter than available width, return as-is
+  if (text.length <= availableWidth) {
+    return prefix + text;
+  }
+
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    // If adding this word would exceed the line length
+    if (currentLine.length + word.length + 1 > availableWidth) {
+      if (currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        // Word is longer than available width, break it
+        lines.push(word.substring(0, availableWidth));
+        currentLine = word.substring(availableWidth);
+      }
+    } else {
+      currentLine = currentLine ? currentLine + ' ' + word : word;
+    }
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  // Join lines with prefix and continuation indent
+  const continuationIndent = ' '.repeat(prefix.length);
+  return lines.map((line, index) =>
+    index === 0 ? prefix + line : continuationIndent + line
+  ).join('\n');
+}
 
 // Configuration validation
 /**
@@ -103,9 +189,9 @@ function saveMemoryToFile() {
 
   try {
     fs.writeFileSync('memory.json', JSON.stringify(memoryData, null, 2));
-    console.log('💾 Memory saved to memory.json');
+    console.log(wrapText('Memory saved to memory.json', '💾 '));
   } catch (error) {
-    console.error('Error saving memory to file:', error);
+    console.error(wrapText(`Error saving memory to file: ${error.message || error}`, '❌ '));
   }
 }
 
@@ -127,7 +213,7 @@ function loadMemoryFromFile() {
         // If the saved data is a flat array (legacy format), convert it to the new structure
         // For now, we'll put all messages under a 'general' key to maintain compatibility
         conversationMemory['general'] = memoryData.conversationMemory;
-        console.log(`💾 Loaded ${memoryData.conversationMemory.length} conversation memory items`);
+        console.log(wrapText(`Loaded ${memoryData.conversationMemory.length} conversation memory items`, '💾 '));
       } else if (typeof memoryData.conversationMemory === 'object' && memoryData.conversationMemory !== null) {
         // Clear existing memory
         Object.keys(conversationMemory).forEach(key => delete conversationMemory[key]);
@@ -135,20 +221,20 @@ function loadMemoryFromFile() {
         // If the saved data is already in the correct object format, restore it directly
         Object.assign(conversationMemory, memoryData.conversationMemory);
         const totalItems = Object.values(conversationMemory).reduce((sum, arr) => sum + arr.length, 0);
-        console.log(`💾 Loaded ${totalItems} conversation memory items across ${Object.keys(conversationMemory).length} conversations`);
+        console.log(wrapText(`Loaded ${totalItems} conversation memory items across ${Object.keys(conversationMemory).length} conversations`, '💾 '));
       }
 
       // Restore auto memory
       if (Array.isArray(memoryData.autoMemory)) {
         autoMemory.length = 0; // Clear existing memory
         memoryData.autoMemory.forEach(item => autoMemory.push(item));
-        console.log(`💾 Loaded ${autoMemory.length} auto memory items`);
+        console.log(wrapText(`Loaded ${autoMemory.length} auto memory items`, '💾 '));
       }
     } else {
-      console.log('No memory file found, starting with empty memory');
+      console.log(wrapText('No memory file found, starting with empty memory', '💾 '));
     }
   } catch (error) {
-    console.error('Error loading memory from file:', error);
+    console.error(wrapText(`Error loading memory from file: ${error.message || error}`, '❌ '));
   }
 }
 
@@ -227,13 +313,13 @@ async function sendNoteToChannel(text, replyId = null) {
         "Content-Type": "application/json",
       },
     });
-    console.log(`📤 Sent: ${text.slice(0, 180)}${text.length > 180 ? '...' : ''}`);
+    console.log(wrapText(text, "📤 Sent: "));
     addToMemory(null, replyId, text, "assistant");
   } catch (error) {
-    console.error(
-      "Error sending note:",
-      error.response ? error.response.data : error.message
-    );
+    console.error(wrapText(
+      `Error sending note: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      "❌ "
+    ));
   }
 }
 
@@ -262,25 +348,50 @@ async function sendReply(text, note, isDirectMessage) {
     // Check if the response was successful
     if (response.status === 200 || response.status === 201) {
       const user = getUserFromNote(note);
-      console.log(`💬 Reply: ${text.slice(0, 500).replace(/\n/g, "\n    ")}${text.length > 500 ? '...' : ''}`);
+      console.log(wrapText(text.replace(/\n/g, "\n   "), "💬 Reply: "));
       addToMemory(null, user, text, "assistant");
     } else {
       console.warn(`Unexpected response status: ${response.status}`);
     }
   } catch (error) {
-    console.error(
-      "Error sending reply:",
-      error.response ? error.response.data : error.message
-    );
+    console.error(wrapText(
+      `Error sending reply: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      "❌ "
+    ));
   }
 }
 
 /**
- * Function to try LLM endpoints with fallback
+ * Attempts to send requests to configured LLM endpoints with intelligent fallback and load balancing.
  *
- * @param {Object} payload - The request payload
- * @param {boolean} useAutoModel - Whether to use AUTO_LLM_MODEL instead of LLM_MODEL
- * @returns {Promise<any>} - The API response
+ * This function implements a robust retry mechanism that:
+ * - Randomizes endpoint selection to distribute load across available services
+ * - Rotates through different API keys and models for each attempt
+ * - Provides comprehensive error logging for debugging
+ * - Throws detailed errors when all endpoints fail
+ *
+ * The function will try each configured endpoint once in random order before giving up.
+ * Each attempt uses a different combination of API key and model based on the endpoint index.
+ *
+ * @param {LLMRequestPayload} payload - The request payload containing messages and LLM configuration
+ * @param {boolean} [useAutoModel=false] - Whether to use AUTO_LLM_MODEL array instead of LLM_MODEL array
+ * @returns {Promise<LLMResponse>} The successful HTTP response from an LLM endpoint (see LLMResponse typedef for structure)
+ * @throws {Error} When all configured endpoints fail or when invalid parameters are provided
+ *
+ * @example
+ * // Basic usage with conversation messages
+ * const response = await tryLLMEndpoints({
+ *   messages: [
+ *     { role: "system", content: "You are a helpful assistant" },
+ *     { role: "user", content: "Hello!" }
+ *   ],
+ *   temperature: 0.7,
+ *   max_tokens: 150
+ * });
+ *
+ * @example
+ * // Using auto model selection
+ * const response = await tryLLMEndpoints(payload, true);
  */
 async function tryLLMEndpoints(payload, useAutoModel = false) {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
@@ -305,15 +416,17 @@ async function tryLLMEndpoints(payload, useAutoModel = false) {
       };
       const requestPayload = { ...payload, model, enable_thinking: false };
       const response = await axios.post(LLM_URLS[i], requestPayload, { headers });
-      console.log(`\x1b[32m✅ Using endpoint: ${LLM_URLS[i]} with model: ${model}\x1b[0m`);
+      console.log(wrapText(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, '\x1b[32m✅ ') + '\x1b[0m');
       return response;
     } catch (error) {
-      console.error(`Error with LLM endpoint ${LLM_URLS[i]}:`, error.message);
+      console.error(wrapText(`Error with LLM endpoint ${LLM_URLS[i]}: ${error.message}`, '❌ '));
       if (j === orderedIndices.length - 1) {
         throw error; // Throw error if all endpoints failed
       }
     }
   }
+  console.error(wrapText('All LLM endpoints failed. Please check your configuration.', '❌ '));
+  throw new Error('All LLM endpoints failed. Please check your configuration.');
 }
 
 /**
@@ -348,10 +461,14 @@ async function processWithAI(username, message, quotedMessage = null) {
       messages,
       max_tokens: MAX_TOKENS,
     });
-    return response.data.choices[0].message.content;
+    const content = response.data?.choices?.[0]?.message?.content;
+    if (!content || content.trim() === "") {
+      throw new Error();
+    }
+    return content;
   } catch (error) {
-    console.error("Error processing with AI:", error);
-    return null;
+    console.error(wrapText(`Error processing with AI: ${error.message || error}`, "❌ "));
+    return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
   }
 }
 
@@ -360,7 +477,7 @@ let ws = new WebSocket(`${WS_URL}/streaming?i=${ACCESS_TOKEN}`);
 let pingInterval;
 
 ws.on("open", () => {
-  console.log("🛜  Connected to Misskey streaming API");
+  console.log(wrapText("Connected to Misskey streaming API", "🛜 "));
   ws.send(
     JSON.stringify({
       type: "connect",
@@ -426,7 +543,7 @@ async function processMessage(message) {
     note.userId !== BOT_USER_ID
   ) {
     const user = getUserFromNote(note);
-    console.log(`👤 ${user}: ${note.text}`);
+    console.log(wrapText(note.text, `👤 ${user}: `));
     addToMemory(user, null, note.text, "user");
 
     let quotedMessage = null;
@@ -491,16 +608,16 @@ ws.on("message", async (data) => {
       });
     }
   } catch (error) {
-    console.error("Error parsing message:", error);
+    console.error(wrapText(`Error parsing message: ${error.message || error}`, "❌ "));
   }
 });
 
 ws.on("error", (error) => {
-  console.error("WebSocket error:", error);
+  console.error(wrapText(`WebSocket error: ${error.message || error}`, "❌ "));
 });
 
 ws.on("close", () => {
-  console.log("Disconnected from Misskey streaming API");
+  console.log(wrapText("Disconnected from Misskey streaming API", "🔌 "));
   clearInterval(pingInterval);
   setTimeout(() => {
     ws = new WebSocket(`${WS_URL}/streaming?i=${ACCESS_TOKEN}`);
@@ -549,9 +666,9 @@ async function processAutoWithAI(message) {
       ],
       max_tokens: MAX_TOKENS,
     }, true);
-    return response.data.choices[0].message.content;
+    return response.data?.choices?.[0]?.message?.content;
   } catch (error) {
-    console.error("Error processing auto message with AI:", error);
+    console.error(wrapText(`Error processing auto message with AI: ${error.message || error}`, "❌ "));
     return null;
   }
 }
@@ -590,7 +707,7 @@ function scheduleNextAutoMessage() {
     scheduleNextAutoMessage();
   }, delay);
 
-  console.log("🕥 Next auto message in " + delay / 60000 + " minutes");
+  console.log(wrapText(`Next auto message in ${(delay / 60000).toFixed(1)} minutes`, "🕥 "));
 }
 
 // Start the auto message scheduling
@@ -620,7 +737,7 @@ const memorySaveInterval = setInterval(() => {
 
 // Handle graceful shutdown to save memory
 process.on('SIGINT', () => {
-  console.log('💾 Saving memory before shutdown...');
+  console.log(wrapText('Saving memory before shutdown...', '💾 '));
   saveMemoryToFile();
   process.exit(0);
 });
@@ -628,4 +745,4 @@ process.on('SIGINT', () => {
 // Load memory from file when starting
 loadMemoryFromFile();
 
-console.log("🤖 " + BOT_USERNAME + " is running...");
+console.log(wrapText(`${BOT_USERNAME} is running...`, "🤖 "));

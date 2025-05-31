@@ -1,4 +1,4 @@
 node_modules
-node_modules/*
+.claude/settings.local.json
 .env
 memory.json
