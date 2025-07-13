@@ -2,7 +2,16 @@
 import "dotenv/config";
 import axios from "axios";
 import WebSocket from "ws";
-import fs from "fs";
+import fs from "node:fs";
+import process from "node:process";
+
+/** @typedef {string} Username */
+
+/**
+ * @typedef {Object} Message - Represents a message in the conversation
+ * @property {string} role - The role of the message sender (e.g., "user", "assistant")
+ * @property {string} content - The content of the message
+ */
 
 /**
  * @typedef {Object} Note - Represents a note in Misskey
@@ -28,8 +37,9 @@ import fs from "fs";
 
 /**
  * @typedef {Object} LLMRequestPayload - The request payload for LLM API calls
- * @property {Array<{role: string, content: string}>} messages - Array of conversation messages
+ * @property {Array<Message>} messages - Array of conversation messages
  * @property {string} [model] - The model to use (can be overridden by function logic)
+ * @property {Array<{id: string}>} [plugins] - Optional plugins to use with the request
  * @property {number} [temperature] - Controls randomness in responses (0.0 to 2.0)
  * @property {number} [max_tokens] - Maximum number of tokens in the response
  * @property {boolean} [stream] - Whether to stream the response
@@ -39,7 +49,7 @@ import fs from "fs";
 /**
  * @typedef {Object} LLMResponse - The response object from LLM API endpoints (Axios response structure)
  * @property {Object} data - The response data from the LLM API
- * @property {Array<Object>} [data.choices] - Array of response choices from the LLM
+ * @property {Array<{message: Message}>} [data.choices] - Array of response choices from the LLM
  * @property {Object} [data.choices[].message] - Message object containing the response
  * @property {string} [data.choices[].message.content] - The generated text content
  * @property {string} [data.choices[].message.role] - The role of the response (usually "assistant")
@@ -52,6 +62,11 @@ import fs from "fs";
  * @property {Object} headers - HTTP response headers
  * @property {Object} config - Axios request configuration used
  * @property {*} [key] - Additional properties that may be present in the response
+ */
+
+/**
+ * @typedef {Record<Username, Array<Message>>} ConversationMemory
+ * Represents the conversation memory structure where keys are usernames or identifiers
  */
 
 /**
@@ -69,7 +84,7 @@ function getTerminalWidth() {
  * @param {number?} maxWidth - Maximum width (defaults to terminal width)
  * @returns {string} Wrapped text
  */
-function wrapText(text, prefix = '', maxWidth = null) {
+function wrapText(text, prefix = "", maxWidth = null) {
   if (!maxWidth) maxWidth = getTerminalWidth();
   if (!text) return text;
 
@@ -81,9 +96,9 @@ function wrapText(text, prefix = '', maxWidth = null) {
     return prefix + text;
   }
 
-  const words = text.split(' ');
+  const words = text.split(" ");
   const lines = [];
-  let currentLine = '';
+  let currentLine = "";
 
   for (const word of words) {
     // If adding this word would exceed the line length
@@ -97,7 +112,7 @@ function wrapText(text, prefix = '', maxWidth = null) {
         currentLine = word.substring(availableWidth);
       }
     } else {
-      currentLine = currentLine ? currentLine + ' ' + word : word;
+      currentLine = currentLine ? currentLine + " " + word : word;
     }
   }
 
@@ -106,10 +121,8 @@ function wrapText(text, prefix = '', maxWidth = null) {
   }
 
   // Join lines with prefix and continuation indent
-  const continuationIndent = ' '.repeat(prefix.length);
-  return lines.map((line, index) =>
-    index === 0 ? prefix + line : continuationIndent + line
-  ).join('\n');
+  const continuationIndent = " ".repeat(prefix.length);
+  return lines.map((line, index) => index === 0 ? prefix + line : continuationIndent + line).join("\n");
 }
 
 // Configuration validation
@@ -128,49 +141,51 @@ function requireEnvVar(value, name) {
 
 // Configuration
 /** @type {string} */
-const BASE_URL = requireEnvVar(process.env.URL, 'URL');
+const BASE_URL = requireEnvVar(process.env.URL, "URL");
 /** @type {string} */
-const WS_URL = requireEnvVar(process.env.WS_URL, 'WS_URL');
+const WS_URL = requireEnvVar(process.env.WS_URL, "WS_URL");
 /** @type {string} */
-const ACCESS_TOKEN = requireEnvVar(process.env.TOKEN, 'TOKEN');
+const ACCESS_TOKEN = requireEnvVar(process.env.TOKEN, "TOKEN");
 /** @type {string | undefined} */
 const CHANNEL_ID = process.env.CHANNEL;
 /** @type {string[]} */
-const LLM_URLS = process.env.LLM_URL ? process.env.LLM_URL.split(',').map(url => url.trim()) : [];
+const LLM_URLS = process.env.LLM_URL ? process.env.LLM_URL.split(",").map((url) => url.trim()) : [];
 /** @type {string[]} */
-const LLM_KEYS = process.env.LLM_KEY ? process.env.LLM_KEY.split(',').map(key => key.trim()) : [];
+const LLM_KEYS = process.env.LLM_KEY ? process.env.LLM_KEY.split(",").map((key) => key.trim()) : [];
 /** @type {string[]} */
-const LLM_MODELS = process.env.LLM_MODEL ? process.env.LLM_MODEL.split(',').map(m => m.trim()) : [];
+const LLM_MODELS = process.env.LLM_MODEL ? process.env.LLM_MODEL.split(",").map((m) => m.trim()) : [];
 /** @type {string[]} */
-const AUTO_LLM_MODELS = process.env.AUTO_LLM_MODEL ? process.env.AUTO_LLM_MODEL.split(',').map(m => m.trim()) : LLM_MODELS;
+const AUTO_LLM_MODELS = process.env.AUTO_LLM_MODEL
+  ? process.env.AUTO_LLM_MODEL.split(",").map((m) => m.trim())
+  : LLM_MODELS;
 /** @type {number} */
-const MAX_TOKENS = parseInt(process.env.MAX_TOKENS ?? '1000');
+const MAX_TOKENS = parseInt(process.env.MAX_TOKENS ?? "1000");
 /** @type {string} */
-const BOT_USER_ID = requireEnvVar(process.env.BOT_USER_ID, 'BOT_USER_ID');
+const BOT_USER_ID = requireEnvVar(process.env.BOT_USER_ID, "BOT_USER_ID");
 /** @type {string} */
-const BOT_USERNAME = requireEnvVar(process.env.BOT_USERNAME, 'BOT_USERNAME');
+const BOT_USERNAME = requireEnvVar(process.env.BOT_USERNAME, "BOT_USERNAME");
 /** @type {string} */
-const SYSTEM_PROMPT = requireEnvVar(process.env.SYSTEM_PROMPT, 'SYSTEM_PROMPT');
+const SYSTEM_PROMPT = requireEnvVar(process.env.SYSTEM_PROMPT, "SYSTEM_PROMPT");
 /** @type {string} */
 const SYSTEM_PROMPT_AUTO = process.env.SYSTEM_PROMPT_AUTO ?? SYSTEM_PROMPT;
 
 // Validate LLM configuration
 if (LLM_URLS.length === 0) {
-  throw new Error('Required environment variable LLM_URL is not set');
+  throw new Error("Required environment variable LLM_URL is not set");
 }
 if (LLM_KEYS.length === 0) {
-  throw new Error('Required environment variable LLM_KEY is not set');
+  throw new Error("Required environment variable LLM_KEY is not set");
 }
 if (LLM_MODELS.length === 0) {
-  throw new Error('Required environment variable LLM_MODEL is not set');
+  throw new Error("Required environment variable LLM_MODEL is not set");
 }
 
 /**
- * @type {Record<string, Array<{ role: string, content: string }>>}
+ * @type {ConversationMemory}
  */
 const conversationMemory = {};
 /** @type {number} */
-const MAX_MEMORY = parseInt(process.env.MAX_MEMORY ?? '20');
+const MAX_MEMORY = parseInt(process.env.MAX_MEMORY ?? "20");
 
 /** @type {string[]} */
 const autoMemory = [];
@@ -184,14 +199,14 @@ const MAX_AUTO_MEMORY = parseInt(process.env.MAX_MEMORY ?? `${MAX_MEMORY}`);
 function saveMemoryToFile() {
   const memoryData = {
     conversationMemory,
-    autoMemory
+    autoMemory,
   };
 
   try {
-    fs.writeFileSync('memory.json', JSON.stringify(memoryData, null, 2));
-    console.log(wrapText('Memory saved to memory.json', '💾 '));
+    fs.writeFileSync("memory.json", JSON.stringify(memoryData, null, 2));
+    console.log(wrapText("Memory saved to memory.json", "💾 "));
   } catch (error) {
-    console.error(wrapText(`Error saving memory to file: ${error.message || error}`, '❌ '));
+    console.error(wrapText(`Error saving memory to file: ${error.message || error}`, "❌ "));
   }
 }
 
@@ -201,40 +216,47 @@ function saveMemoryToFile() {
  */
 function loadMemoryFromFile() {
   try {
-    if (fs.existsSync('memory.json')) {
-      const data = fs.readFileSync('memory.json', 'utf8');
+    if (fs.existsSync("memory.json")) {
+      const data = fs.readFileSync("memory.json", "utf8");
       const memoryData = JSON.parse(data);
 
       // Restore conversation memory
       if (Array.isArray(memoryData.conversationMemory)) {
         // Clear existing memory
-        Object.keys(conversationMemory).forEach(key => delete conversationMemory[key]);
+        Object.keys(conversationMemory).forEach((key) => delete conversationMemory[key]);
 
         // If the saved data is a flat array (legacy format), convert it to the new structure
         // For now, we'll put all messages under a 'general' key to maintain compatibility
-        conversationMemory['general'] = memoryData.conversationMemory;
-        console.log(wrapText(`Loaded ${memoryData.conversationMemory.length} conversation memory items`, '💾 '));
-      } else if (typeof memoryData.conversationMemory === 'object' && memoryData.conversationMemory !== null) {
+        conversationMemory["general"] = memoryData.conversationMemory;
+        console.log(wrapText(`Loaded ${memoryData.conversationMemory.length} conversation memory items`, "💾 "));
+      } else if (typeof memoryData.conversationMemory === "object" && memoryData.conversationMemory !== null) {
         // Clear existing memory
-        Object.keys(conversationMemory).forEach(key => delete conversationMemory[key]);
+        Object.keys(conversationMemory).forEach((key) => delete conversationMemory[key]);
 
         // If the saved data is already in the correct object format, restore it directly
         Object.assign(conversationMemory, memoryData.conversationMemory);
         const totalItems = Object.values(conversationMemory).reduce((sum, arr) => sum + arr.length, 0);
-        console.log(wrapText(`Loaded ${totalItems} conversation memory items across ${Object.keys(conversationMemory).length} conversations`, '💾 '));
+        console.log(
+          wrapText(
+            `Loaded ${totalItems} conversation memory items across ${
+              Object.keys(conversationMemory).length
+            } conversations`,
+            "💾 ",
+          ),
+        );
       }
 
       // Restore auto memory
       if (Array.isArray(memoryData.autoMemory)) {
         autoMemory.length = 0; // Clear existing memory
-        memoryData.autoMemory.forEach(item => autoMemory.push(item));
-        console.log(wrapText(`Loaded ${autoMemory.length} auto memory items`, '💾 '));
+        memoryData.autoMemory.forEach((item) => autoMemory.push(item));
+        console.log(wrapText(`Loaded ${autoMemory.length} auto memory items`, "💾 "));
       }
     } else {
-      console.log(wrapText('No memory file found, starting with empty memory', '💾 '));
+      console.log(wrapText("No memory file found, starting with empty memory", "💾 "));
     }
   } catch (error) {
-    console.error(wrapText(`Error loading memory from file: ${error.message || error}`, '❌ '));
+    console.error(wrapText(`Error loading memory from file: ${error.message || error}`, "❌ "));
   }
 }
 
@@ -253,7 +275,7 @@ function addToMemory(username, inReplyTo, message, role = "user") {
   if (username) {
     content = `${username}: ${message}`;
   }
-  const key = username || inReplyTo || 'unknown';
+  const key = username || inReplyTo || "unknown";
   if (!conversationMemory[key]) {
     conversationMemory[key] = [];
   }
@@ -268,18 +290,15 @@ function addToMemory(username, inReplyTo, message, role = "user") {
 
 function isValidUserMessages(obj) {
   return obj !== null &&
-    typeof obj === 'object' &&
+    typeof obj === "object" &&
     !Array.isArray(obj) &&
     Object.keys(obj).length > 0 &&
-    Object.values(obj).every(value => Array.isArray(value));
+    Object.values(obj).every((value) => Array.isArray(value));
 }
 
 /**
- * Function to get the conversation history as a string
- *
- */
-/**
  * Get conversation history for a specific user
+ *
  * @param {string | null} username - The username to get history for
  * @returns {Array<{role: string, content: string}>} Array of conversation messages
  */
@@ -318,8 +337,28 @@ async function sendNoteToChannel(text, replyId = null) {
   } catch (error) {
     console.error(wrapText(
       `Error sending note: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
-      "❌ "
+      "❌ ",
     ));
+  }
+}
+
+/**
+ * Function to fetch a note by its ID
+ * @param {string} noteId - The ID of the note to fetch
+ * @returns {Promise<Note|null>} The note object or null if not found
+ */
+async function fetchNoteById(noteId) {
+  try {
+    const response = await axios.post(`${BASE_URL}/api/notes/show`, { noteId }, {
+      headers: {
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error(wrapText(`Error fetching note ${noteId}: ${error.message}`, "❌ "));
+    return null;
   }
 }
 
@@ -356,7 +395,7 @@ async function sendReply(text, note, isDirectMessage) {
   } catch (error) {
     console.error(wrapText(
       `Error sending reply: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
-      "❌ "
+      "❌ ",
     ));
   }
 }
@@ -414,19 +453,24 @@ async function tryLLMEndpoints(payload, useAutoModel = false) {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       };
-      const requestPayload = { ...payload, model, enable_thinking: false };
+      const requestPayload = {
+        ...payload,
+        model,
+        reasoning: { exclude: true, max_tokens: 0 },
+        plugins: [{ id: "web" }],
+      };
       const response = await axios.post(LLM_URLS[i], requestPayload, { headers });
-      console.log(wrapText(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, '\x1b[32m✅ ') + '\x1b[0m');
+      console.log(wrapText(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, "\x1b[32m✅ ") + "\x1b[0m");
       return response;
     } catch (error) {
-      console.error(wrapText(`Error with LLM endpoint ${LLM_URLS[i]}: ${error.message}`, '❌ '));
+      console.error(wrapText(`Error with LLM endpoint ${LLM_URLS[i]}: ${error.message}`, "❌ "));
       if (j === orderedIndices.length - 1) {
         throw error; // Throw error if all endpoints failed
       }
     }
   }
-  console.error(wrapText('All LLM endpoints failed. Please check your configuration.', '❌ '));
-  throw new Error('All LLM endpoints failed. Please check your configuration.');
+  console.error(wrapText("All LLM endpoints failed. Please check your configuration.", "❌ "));
+  throw new Error("All LLM endpoints failed. Please check your configuration.");
 }
 
 /**
@@ -435,9 +479,10 @@ async function tryLLMEndpoints(payload, useAutoModel = false) {
  * @param {string} username
  * @param {string} message
  * @param {string | null} quotedMessage
+ * @param {Note | null} replyContext
  * @returns {Promise<string | null>}
  */
-async function processWithAI(username, message, quotedMessage = null) {
+async function processWithAI(username, message, quotedMessage = null, replyContext = null) {
   try {
     // Avoid escaping double quotes in the message
     message = message.replace(/"/g, "'");
@@ -449,7 +494,11 @@ async function processWithAI(username, message, quotedMessage = null) {
       prompt += `Quoted message: "${quotedMessage}"`;
     }
 
-    // prompt += `${username}: ${message}`;
+    // If there's reply context, include it in the prompt
+    if (replyContext) {
+      const replyUser = getUserFromNote(replyContext);
+      prompt += `Relevant message "${replyUser}: ${replyContext.text}"`;
+    }
 
     const messages = [
       { role: "system", content: prompt },
@@ -457,15 +506,17 @@ async function processWithAI(username, message, quotedMessage = null) {
       { role: "user", content: `${username}: ${message}` },
     ];
 
+    // console.debug(wrapText(`Sending ${messages.length} messages to LLM with prompt: ${prompt.substring(prompt.length - 240).trim()}`, "📤 "));
+
     const response = await tryLLMEndpoints({
       messages,
       max_tokens: MAX_TOKENS,
     });
     const content = response.data?.choices?.[0]?.message?.content;
     if (!content || content.trim() === "") {
-      throw new Error();
+      throw new Error("AI response is empty or invalid");
     }
-    return content;
+    return content.trim();
   } catch (error) {
     console.error(wrapText(`Error processing with AI: ${error.message || error}`, "❌ "));
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
@@ -485,7 +536,7 @@ ws.on("open", () => {
         channel: "main",
         id: "111111",
       },
-    })
+    }),
   );
   pingInterval = startPingInterval(ws);
 });
@@ -528,13 +579,11 @@ async function processMessage(message) {
   const note = message.body.body;
 
   // Censorship
-  note.text = note.text.replace(/nig(ger)?|jeet/gi, 'elon')
-    .replace(/rape|fuck/gi, 'gently caress')
-
+  note.text = note.text.replace(/nig(ger)?|jeet/gi, "elon")
+    .replace(/rape|fuck/gi, "gently caress");
 
   // Check if the note is a reply to the bot or mentions the bot
-  const isReplyToBot =
-    note.reply && note.reply?.userId === BOT_USER_ID;
+  const isReplyToBot = note.reply && note.reply?.userId === BOT_USER_ID;
   const isMentionToBot = note.text?.includes(`@${BOT_USERNAME}`);
 
   // Check if the message is NOT from the bot itself to prevent loops
@@ -546,16 +595,30 @@ async function processMessage(message) {
     console.log(wrapText(note.text, `👤 ${user}: `));
     addToMemory(user, null, note.text, "user");
 
+    /** @type {string | null} */
     let quotedMessage = null;
+    /** @type {Note | null} */
+    let replyContext = null;
+
     if (isReplyToBot) {
       quotedMessage = note.reply?.text;
+    }
+
+    // If this note is a reply to another note, fetch the full context
+    if (note.replyId) {
+      console.log(wrapText(`Fetching reply context for note ${note.replyId}`, "🔍 "));
+      replyContext = await fetchNoteById(note.replyId);
+      if (replyContext) {
+        console.log(wrapText(`Found reply context: ${replyContext.text?.substring(0, 100)}...`, "📄 "));
+      }
     }
 
     // Process the note with AI
     const response = await processWithAI(
       user,
       note.text,
-      quotedMessage
+      quotedMessage,
+      replyContext,
     );
 
     // Check if the original message is a direct message
@@ -573,11 +636,11 @@ async function processMessage(message) {
  * @returns {string} - The user identifier in the format "username@host" or just "username"
  */
 function getUserFromNote(note) {
-  let user = '';
+  let user = "";
   if (note?.user.host) {
     user = `${note.user.username}@${note.user.host}`;
   } else {
-    user = note?.user.username
+    user = note?.user.username;
   }
 
   return user;
@@ -649,7 +712,7 @@ function getAutoConversationHistory() {
 /**
  * Function to process auto message with AI API
  * @param {string} message
- * @returns {Promise<string | null>}
+ * @returns {Promise<string | undefined>}
  */
 async function processAutoWithAI(message) {
   try {
@@ -669,7 +732,7 @@ async function processAutoWithAI(message) {
     return response.data?.choices?.[0]?.message?.content;
   } catch (error) {
     console.error(wrapText(`Error processing auto message with AI: ${error.message || error}`, "❌ "));
-    return null;
+    return;
   }
 }
 
@@ -679,17 +742,18 @@ async function processAutoWithAI(message) {
  */
 async function sendAutoMessage() {
   let response = await processAutoWithAI("AUTO");
-  if (response !== null) {
-    // clean up the response: if it starts with "AUTO" or "ENV_BOT_NAME:", remove it.
-    response = response.replace(/^AUTO: /gi, "");
-    response = response.replace(
-      new RegExp(BOT_USERNAME + ": ", "gi"),
-      ""
-    );
 
-    await sendNoteToChannel(response);
-    addToAutoMemory(BOT_USERNAME, response);
-  }
+  if (!response) return;
+
+  // clean up the response: if it starts with "AUTO" or "ENV_BOT_NAME:", remove it.
+  response = response.replace(/^AUTO: /gi, "");
+  response = response.replace(
+    new RegExp(BOT_USERNAME + ": ", "gi"),
+    "",
+  );
+
+  await sendNoteToChannel(response);
+  addToAutoMemory(BOT_USERNAME, response);
 }
 
 /**
@@ -699,8 +763,7 @@ async function sendAutoMessage() {
 function scheduleNextAutoMessage() {
   const minDelay = 5 * 60 * 1000; // 30 minutes
   const maxDelay = 30 * 60 * 1000; // 4 hours
-  const delay =
-    Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+  const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 
   setTimeout(() => {
     sendAutoMessage();
@@ -736,8 +799,8 @@ const memorySaveInterval = setInterval(() => {
 }, 5 * 60 * 1000);
 
 // Handle graceful shutdown to save memory
-process.on('SIGINT', () => {
-  console.log(wrapText('Saving memory before shutdown...', '💾 '));
+process.on("SIGINT", () => {
+  console.log(wrapText("Saving memory before shutdown...", "💾 "));
   saveMemoryToFile();
   process.exit(0);
 });
