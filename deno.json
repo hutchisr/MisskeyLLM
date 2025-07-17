@@ -16,8 +16,5 @@
     "semiColons": true,
     "singleQuote": false,
     "proseWrap": "preserve"
-  },
-  "imports": {
-    "@std/dotenv": "jsr:@std/dotenv@^0.225.5"
   }
 }

@@ -1,36 +1,40 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 
 import "jsr:@std/dotenv/load";
+// import * as toml from "jsr:@std/toml/parse";
 
-export type Username = string;
+// const config = toml.parse(await Deno.readTextFile("config.toml"));
 
-export interface Message {
+type Username = string;
+
+type Message = {
   role: string;
   content: string;
-}
+};
 
-export interface Note {
+type Note = {
   id: string;
-  text: string;
+  text: string | null;
   userId: string;
   user: User;
   replyId: string | null;
   renoteId: string | null;
   reply: Note | null;
   renote: Note | null;
-  visibility?: string;
+  visibility: "public" | "home" | "followers" | "specified";
+  mentions?: string[];
   [key: string]: unknown;
-}
+};
 
-export interface User {
+type User = {
   id: string;
   name: string | null;
   username: string;
   host: string;
   [key: string]: unknown;
-}
+};
 
-export interface LLMRequestPayload {
+type LLMRequestPayload = {
   messages: Message[];
   model?: string;
   plugins?: Array<{ id: string }>;
@@ -39,9 +43,9 @@ export interface LLMRequestPayload {
   stream?: boolean;
   reasoning?: { exclude: boolean; max_tokens: number };
   [key: string]: unknown;
-}
+};
 
-export interface LLMResponse {
+type LLMResponse = {
   choices?: Array<{ message: Message }>;
   usage?: {
     prompt_tokens: number;
@@ -49,23 +53,16 @@ export interface LLMResponse {
     total_tokens: number;
   };
   [key: string]: unknown;
-}
-
-export interface HttpResponse<T = unknown> {
-  data: T;
-  status: number;
-  statusText: string;
-  headers: Headers;
-}
+};
 
 export type ConversationMemory = Record<Username, Message[]>;
 
-export interface MemoryData {
+type MemoryData = {
   conversationMemory: ConversationMemory;
   autoMemory: string[];
-}
+};
 
-export interface WebSocketMessage {
+type WebSocketMessage = {
   type: string;
   body?: {
     type?: string;
@@ -73,15 +70,15 @@ export interface WebSocketMessage {
     channel?: string;
     id?: string;
   };
-}
+};
 
-export interface IncomingMessage {
+type IncomingMessage = {
   type: string;
   body: {
     type: string;
     body: Note;
   };
-}
+};
 
 // Utility functions
 /**
@@ -156,17 +153,11 @@ const BASE_URL: string = requireEnvVar("URL");
 const WS_URL: string = requireEnvVar("WS_URL");
 const ACCESS_TOKEN: string = requireEnvVar("TOKEN");
 const CHANNEL_ID: string | undefined = Deno.env.get("CHANNEL");
-const LLM_URLS: string[] = Deno.env.get("LLM_URL")
-  ? Deno.env.get("LLM_URL")!.split(",").map((url: string) => url.trim())
-  : [];
-const LLM_KEYS: string[] = Deno.env.get("LLM_KEY")
-  ? Deno.env.get("LLM_KEY")!.split(",").map((key: string) => key.trim())
-  : [];
-const LLM_MODELS: string[] = Deno.env.get("LLM_MODEL")
-  ? Deno.env.get("LLM_MODEL")!.split(",").map((m: string) => m.trim())
-  : [];
+const LLM_URLS: string[] = requireEnvVar("LLM_URI").split(",").map((s) => s.trim());
+const LLM_KEYS: string[] = requireEnvVar("LLM_KEY").split(",").map((s) => s.trim());
+const LLM_MODELS: string[] = requireEnvVar("LLM_MODEL").split(",").map((s) => s.trim());
 const AUTO_LLM_MODELS: string[] = Deno.env.get("AUTO_LLM_MODEL")
-  ? Deno.env.get("AUTO_LLM_MODEL")!.split(",").map((m: string) => m.trim())
+  ? Deno.env.get("AUTO_LLM_MODEL")!.split(",").map((s) => s.trim())
   : LLM_MODELS;
 const MAX_TOKENS: number = parseInt(Deno.env.get("MAX_TOKENS") ?? "1000");
 const BOT_USER_ID: string = requireEnvVar("BOT_USER_ID");
@@ -388,7 +379,7 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
 /**
  * Attempts to send requests to configured LLM endpoints with intelligent fallback and load balancing.
  */
-async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false): Promise<HttpResponse<LLMResponse>> {
+async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false): Promise<LLMResponse> {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
 
   // Create array of indices to try in random order
@@ -423,15 +414,8 @@ async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false)
 
       const data = await response.json() as LLMResponse;
 
-      const httpResponse: HttpResponse<LLMResponse> = {
-        data,
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      };
-
       console.log(wrap(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, "\x1b[32m✅ ") + "\x1b[0m");
-      return httpResponse;
+      return data;
     } catch (error) {
       console.error(
         wrap(`Error with LLM endpoint ${LLM_URLS[i]}: ${error instanceof Error ? error.message : error}`, "❌ "),
@@ -450,10 +434,11 @@ async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false)
  */
 async function processWithAI(
   username: string,
-  message: string,
+  message: string | null,
   quotedMessage: string | null = null,
   replyContext: Note | null = null,
-): Promise<string | null> {
+): Promise<string | void> {
+  if (!message) return;
   try {
     // Avoid escaping double quotes in the message
     message = message.replace(/"/g, "'");
@@ -483,7 +468,7 @@ async function processWithAI(
       plugins: [{ id: "web" }],
     });
 
-    const content = response.data?.choices?.[0]?.message?.content;
+    const content = response?.choices?.[0]?.message?.content;
     if (!content || content.trim() === "") {
       throw new Error("AI response is empty or invalid");
     }
@@ -560,9 +545,9 @@ function connectWebSocket(): void {
     const note = message.body.body;
 
     // Censorship
-    note.text = note.text.replace(/nig(ger)?|jeet|kike/gi, "elon")
+    note.text = note.text?.replace(/nig(ger)?|jeet|kike/gi, "elon")
       .replace(/rape|fuck/gi, "gently caress")
-      .replace(/nuke|bomb/gi, "hug");
+      .replace(/nuke|bomb/gi, "hug") ?? null;
 
     // Check if the note is a reply to the bot or mentions the bot
     const isReplyToBot = note.reply && note.reply?.userId === BOT_USER_ID;
@@ -571,8 +556,8 @@ function connectWebSocket(): void {
     // Check if the message is NOT from the bot itself to prevent loops
     if ((isReplyToBot || isMentionToBot) && note.userId !== BOT_USER_ID) {
       const user = getUserFromNote(note);
-      console.log(wrap(note.text, `👤 ${user}: `));
-      addToMemory(user, null, note.text, "user");
+      console.log(wrap(note.text ?? "", `👤 ${user}: `));
+      addToMemory(user, null, note.text ?? "", "user");
 
       let quotedMessage: string | null = null;
       let replyContext: Note | null = null;
@@ -597,7 +582,7 @@ function connectWebSocket(): void {
       const isDirectMessage = note.visibility === "specified";
 
       // Send the response as a reply
-      if (response !== null) {
+      if (response) {
         await sendReply(response, note, isDirectMessage);
       }
     }
@@ -672,7 +657,7 @@ async function processAutoWithAI(message: string): Promise<string | undefined> {
       ],
       max_tokens: MAX_TOKENS,
     }, true);
-    return response.data?.choices?.[0]?.message?.content;
+    return response?.choices?.[0]?.message?.content;
   } catch (error) {
     console.error(
       wrap(`Error processing auto message with AI: ${error instanceof Error ? error.message : error}`, "❌ "),
