@@ -42,9 +42,7 @@ export interface LLMRequestPayload {
 }
 
 export interface LLMResponse {
-  choices?: Array<{
-    message: Message;
-  }>;
+  choices?: Array<{ message: Message }>;
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -101,11 +99,7 @@ function getTerminalWidth(): number {
 /**
  * Word wrap text to fit terminal width
  */
-function wrapText(
-  text: string,
-  prefix = "",
-  maxWidth: number | null = null,
-): string {
+function wrap(text: string, prefix = "", maxWidth: number | null = null): string {
   if (!maxWidth) maxWidth = getTerminalWidth();
   if (!text) return text;
 
@@ -178,8 +172,7 @@ const MAX_TOKENS: number = parseInt(Deno.env.get("MAX_TOKENS") ?? "1000");
 const BOT_USER_ID: string = requireEnvVar("BOT_USER_ID");
 const BOT_USERNAME: string = requireEnvVar("BOT_USERNAME");
 const SYSTEM_PROMPT: string = requireEnvVar("SYSTEM_PROMPT");
-const SYSTEM_PROMPT_AUTO: string = Deno.env.get("SYSTEM_PROMPT_AUTO") ??
-  SYSTEM_PROMPT;
+const SYSTEM_PROMPT_AUTO: string = Deno.env.get("SYSTEM_PROMPT_AUTO") ?? SYSTEM_PROMPT;
 
 // Validate LLM configuration
 if (LLM_URLS.length === 0) {
@@ -197,9 +190,7 @@ const conversationMemory: ConversationMemory = {};
 const MAX_MEMORY: number = parseInt(Deno.env.get("MAX_MEMORY") ?? "20");
 
 const autoMemory: string[] = [];
-const MAX_AUTO_MEMORY: number = parseInt(
-  Deno.env.get("MAX_MEMORY") ?? `${MAX_MEMORY}`,
-);
+const MAX_AUTO_MEMORY: number = parseInt(Deno.env.get("MAX_MEMORY") ?? `${MAX_MEMORY}`);
 
 /**
  * Function to save conversation memory to file using Deno APIs
@@ -211,18 +202,10 @@ async function saveMemoryToFile(): Promise<void> {
   };
 
   try {
-    await Deno.writeTextFile(
-      "memory.json",
-      JSON.stringify(memoryData, null, 2),
-    );
-    console.log(wrapText("Memory saved to memory.json", "💾 "));
+    await Deno.writeTextFile("memory.json", JSON.stringify(memoryData, null, 2));
+    console.log(wrap("Memory saved to memory.json", "💾 "));
   } catch (error) {
-    console.error(
-      wrapText(
-        `Error saving memory to file: ${error instanceof Error ? error.message : error}`,
-        "❌ ",
-      ),
-    );
+    console.error(wrap(`Error saving memory to file: ${error instanceof Error ? error.message : error}`, "❌ "));
   }
 }
 
@@ -242,30 +225,24 @@ async function loadMemoryFromFile(): Promise<void> {
         Object.keys(conversationMemory).forEach((key) => delete conversationMemory[key]);
 
         // If the saved data is a flat array (legacy format), convert it to the new structure
-        conversationMemory["general"] = memoryData
-          .conversationMemory as unknown as Message[];
+        conversationMemory["general"] = memoryData.conversationMemory as unknown as Message[];
         console.log(
-          wrapText(
+          wrap(
             `Loaded ${(memoryData.conversationMemory as unknown as Message[]).length} conversation memory items`,
             "💾 ",
           ),
         );
-      } else if (
-        typeof memoryData.conversationMemory === "object" &&
-        memoryData.conversationMemory !== null
-      ) {
+      } else if (typeof memoryData.conversationMemory === "object" && memoryData.conversationMemory !== null) {
         // Clear existing memory
         Object.keys(conversationMemory).forEach((key) => delete conversationMemory[key]);
 
         // If the saved data is already in the correct object format, restore it directly
         Object.assign(conversationMemory, memoryData.conversationMemory);
-        const totalItems = Object.values(conversationMemory).reduce(
-          (sum, arr) => sum + arr.length,
-          0,
-        );
+        const totalItems = Object.values(conversationMemory).reduce((sum, arr) => sum + arr.length, 0);
         console.log(
-          wrapText(
-            `Loaded ${totalItems} conversation memory items across ${Object.keys(conversationMemory).length
+          wrap(
+            `Loaded ${totalItems} conversation memory items across ${
+              Object.keys(conversationMemory).length
             } conversations`,
             "💾 ",
           ),
@@ -276,34 +253,20 @@ async function loadMemoryFromFile(): Promise<void> {
       if (Array.isArray(memoryData.autoMemory)) {
         autoMemory.length = 0; // Clear existing memory
         memoryData.autoMemory.forEach((item) => autoMemory.push(item));
-        console.log(
-          wrapText(`Loaded ${autoMemory.length} auto memory items`, "💾 "),
-        );
+        console.log(wrap(`Loaded ${autoMemory.length} auto memory items`, "💾 "));
       }
     } else {
-      console.log(
-        wrapText("No memory file found, starting with empty memory", "💾 "),
-      );
+      console.log(wrap("No memory file found, starting with empty memory", "💾 "));
     }
   } catch (error) {
-    console.error(
-      wrapText(
-        `Error loading memory from file: ${error instanceof Error ? error.message : error}`,
-        "❌ ",
-      ),
-    );
+    console.error(wrap(`Error loading memory from file: ${error instanceof Error ? error.message : error}`, "❌ "));
   }
 }
 
 /**
  * Function to add a message to the conversation memory
  */
-function addToMemory(
-  username: string | null,
-  inReplyTo: string | null,
-  message: string,
-  role = "user",
-): void {
+function addToMemory(username: string | null, inReplyTo: string | null, message: string, role = "user"): void {
   let content = message;
   if (username) {
     content = `${username}: ${message}`;
@@ -335,10 +298,7 @@ function getConversationHistory(username: string | null = null): Message[] {
 /**
  * Function to send a note to the channel using Deno's fetch API
  */
-async function sendNoteToChannel(
-  text: string,
-  replyId: string | null = null,
-): Promise<void> {
+async function sendNoteToChannel(text: string, replyId: string | null = null): Promise<void> {
   try {
     const payload: Record<string, unknown> = {
       channelId: CHANNEL_ID,
@@ -348,13 +308,24 @@ async function sendNoteToChannel(
       payload.replyId = replyId;
     }
 
-    console.log(wrapText(text, "📤 Sent: "));
-    addToMemory(null, replyId, text, "assistant");
+    const response = await fetch(`${BASE_URL}/api/notes/create`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    // Check if the response was successful
+    if (response.status === 200 || response.status === 201) {
+      console.log(wrap(text, "📤 Sent: "));
+      addToMemory(null, replyId, text, "assistant");
+    } else {
+      console.warn(`Unexpected response status: ${response.status}`);
+    }
   } catch (error) {
-    console.error(wrapText(
-      `Error sending note: ${error instanceof Error ? error.message : error}`,
-      "❌ ",
-    ));
+    console.error(wrap(`Error sending note: ${error instanceof Error ? error.message : error}`, "❌ "));
   }
 }
 
@@ -375,12 +346,7 @@ async function fetchNoteById(noteId: string): Promise<Note | null> {
     const note = await response.json() as Note;
     return note;
   } catch (error) {
-    console.error(
-      wrapText(
-        `Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`,
-        "❌ ",
-      ),
-    );
+    console.error(wrap(`Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`, "❌ "));
     return null;
   }
 }
@@ -388,11 +354,7 @@ async function fetchNoteById(noteId: string): Promise<Note | null> {
 /**
  * Function to reply using Deno's fetch API
  */
-async function sendReply(
-  text: string,
-  note: Note,
-  isDirectMessage: boolean,
-): Promise<void> {
+async function sendReply(text: string, note: Note, isDirectMessage: boolean): Promise<void> {
   try {
     const payload = {
       channelId: CHANNEL_ID,
@@ -413,36 +375,26 @@ async function sendReply(
     // Check if the response was successful
     if (response.status === 200 || response.status === 201) {
       const user = getUserFromNote(note);
-      console.log(wrapText(text.replace(/\n/g, "\n   "), "💬 Reply: "));
+      console.log(wrap(text.replace(/\n/g, "\n   "), "💬 Reply: "));
       addToMemory(null, user, text, "assistant");
     } else {
       console.warn(`Unexpected response status: ${response.status}`);
     }
   } catch (error) {
-    console.error(wrapText(
-      `Error sending reply: ${error instanceof Error ? error.message : error}`,
-      "❌ ",
-    ));
+    console.error(wrap(`Error sending reply: ${error instanceof Error ? error.message : error}`, "❌ "));
   }
 }
 
 /**
  * Attempts to send requests to configured LLM endpoints with intelligent fallback and load balancing.
- * Uses Deno's fetch API instead of axios.
  */
-async function tryLLMEndpoints(
-  payload: LLMRequestPayload,
-  useAutoModel = false,
-): Promise<HttpResponse<LLMResponse>> {
+async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false): Promise<HttpResponse<LLMResponse>> {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
 
   // Create array of indices to try in random order
   const indices = Array.from({ length: LLM_URLS.length }, (_, i) => i);
   const startIndex = Math.floor(Math.random() * indices.length);
-  const orderedIndices = [
-    ...indices.slice(startIndex),
-    ...indices.slice(0, startIndex),
-  ];
+  const orderedIndices = [...indices.slice(startIndex), ...indices.slice(0, startIndex)];
 
   for (let j = 0; j < orderedIndices.length; j++) {
     const i = orderedIndices[j];
@@ -461,7 +413,6 @@ async function tryLLMEndpoints(
         ...payload,
         model,
         reasoning: { exclude: true, max_tokens: 0 },
-        plugins: [{ id: "web" }],
       };
 
       const response = await fetch(LLM_URLS[i], {
@@ -479,25 +430,18 @@ async function tryLLMEndpoints(
         headers: response.headers,
       };
 
-      console.log(
-        wrapText(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, "\x1b[32m✅ ") + "\x1b[0m",
-      );
+      console.log(wrap(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, "\x1b[32m✅ ") + "\x1b[0m");
       return httpResponse;
     } catch (error) {
       console.error(
-        wrapText(`Error with LLM endpoint ${LLM_URLS[i]}: ${error instanceof Error ? error.message : error}`, "❌ "),
+        wrap(`Error with LLM endpoint ${LLM_URLS[i]}: ${error instanceof Error ? error.message : error}`, "❌ "),
       );
       if (j === orderedIndices.length - 1) {
         throw error; // Throw error if all endpoints failed
       }
     }
   }
-  console.error(
-    wrapText(
-      "All LLM endpoints failed. Please check your configuration.",
-      "❌ ",
-    ),
-  );
+  console.error(wrap("All LLM endpoints failed. Please check your configuration.", "❌ "));
   throw new Error("All LLM endpoints failed. Please check your configuration.");
 }
 
@@ -536,6 +480,7 @@ async function processWithAI(
     const response = await tryLLMEndpoints({
       messages,
       max_tokens: MAX_TOKENS,
+      plugins: [{ id: "web" }],
     });
 
     const content = response.data?.choices?.[0]?.message?.content;
@@ -544,12 +489,7 @@ async function processWithAI(
     }
     return content.trim();
   } catch (error) {
-    console.error(
-      wrapText(
-        `Error processing with AI: ${error instanceof Error ? error.message : error}`,
-        "❌ ",
-      ),
-    );
+    console.error(wrap(`Error processing with AI: ${error instanceof Error ? error.message : error}`, "❌ "));
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
   }
 }
@@ -575,7 +515,7 @@ function connectWebSocket(): void {
   ws = new WebSocket(`${WS_URL}/streaming?i=${ACCESS_TOKEN}`);
 
   ws.addEventListener("open", () => {
-    console.log(wrapText("Connected to Misskey streaming API", "🌎 "));
+    console.log(wrap("Connected to Misskey streaming API", "🌎 "));
     ws.send(JSON.stringify({
       type: "connect",
       body: {
@@ -620,8 +560,9 @@ function connectWebSocket(): void {
     const note = message.body.body;
 
     // Censorship
-    note.text = note.text.replace(/nig(ger)?|jeet/gi, "elon")
-      .replace(/rape|fuck/gi, "gently caress");
+    note.text = note.text.replace(/nig(ger)?|jeet|kike/gi, "elon")
+      .replace(/rape|fuck/gi, "gently caress")
+      .replace(/nuke|bomb/gi, "hug");
 
     // Check if the note is a reply to the bot or mentions the bot
     const isReplyToBot = note.reply && note.reply?.userId === BOT_USER_ID;
@@ -630,7 +571,7 @@ function connectWebSocket(): void {
     // Check if the message is NOT from the bot itself to prevent loops
     if ((isReplyToBot || isMentionToBot) && note.userId !== BOT_USER_ID) {
       const user = getUserFromNote(note);
-      console.log(wrapText(note.text, `👤 ${user}: `));
+      console.log(wrap(note.text, `👤 ${user}: `));
       addToMemory(user, null, note.text, "user");
 
       let quotedMessage: string | null = null;
@@ -642,27 +583,15 @@ function connectWebSocket(): void {
 
       // If this note is a reply to another note, fetch the full context
       if (note.replyId) {
-        console.log(
-          wrapText(`Fetching reply context for note ${note.replyId}`, "🔍 "),
-        );
+        console.log(wrap(`Fetching reply context for note ${note.replyId}`, "🔍 "));
         replyContext = await fetchNoteById(note.replyId);
         if (replyContext) {
-          console.log(
-            wrapText(
-              `Found reply context: ${replyContext.text?.substring(0, 100)}...`,
-              "📄 ",
-            ),
-          );
+          console.log(wrap(`Found reply context: ${replyContext.text?.substring(0, 100)}...`, "📄 "));
         }
       }
 
       // Process the note with AI
-      const response = await processWithAI(
-        user,
-        note.text,
-        quotedMessage,
-        replyContext,
-      );
+      const response = await processWithAI(user, note.text, quotedMessage, replyContext);
 
       // Check if the original message is a direct message
       const isDirectMessage = note.visibility === "specified";
@@ -674,7 +603,7 @@ function connectWebSocket(): void {
     }
   }
 
-  ws.addEventListener("message", async (event) => {
+  ws.addEventListener("message", (event) => {
     const stringData = event.data;
 
     try {
@@ -682,9 +611,7 @@ function connectWebSocket(): void {
       if (message.type === "pong") {
         // received pong
       } else if (
-        message.type === "channel" &&
-        message.body &&
-        (message.body.type === "mention" || message.body.type === "reply")
+        message.type === "channel" && message.body && (message.body.type === "mention" || message.body.type === "reply")
       ) {
         const note = message.body.body!;
         const messageId = note.id;
@@ -700,21 +627,16 @@ function connectWebSocket(): void {
         });
       }
     } catch (error) {
-      console.error(
-        wrapText(
-          `Error parsing message: ${error instanceof Error ? error.message : error}`,
-          "❌ ",
-        ),
-      );
+      console.error(wrap(`Error parsing message: ${error instanceof Error ? error.message : error}`, "❌ "));
     }
   });
 
   ws.addEventListener("error", (event) => {
-    console.error(wrapText(`WebSocket error: ${event}`, "❌ "));
+    console.error(wrap(`WebSocket error: ${event}`, "❌ "));
   });
 
   ws.addEventListener("close", () => {
-    console.log(wrapText("Disconnected from Misskey streaming API", "🔌 "));
+    console.log(wrap("Disconnected from Misskey streaming API", "🔌 "));
     clearInterval(pingInterval);
     setTimeout(() => {
       connectWebSocket();
@@ -753,10 +675,7 @@ async function processAutoWithAI(message: string): Promise<string | undefined> {
     return response.data?.choices?.[0]?.message?.content;
   } catch (error) {
     console.error(
-      wrapText(
-        `Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
-        "❌ ",
-      ),
+      wrap(`Error processing auto message with AI: ${error instanceof Error ? error.message : error}`, "❌ "),
     );
     return;
   }
@@ -784,20 +703,14 @@ async function sendAutoMessage(): Promise<void> {
 function scheduleNextAutoMessage(): void {
   const minDelay = 5 * 60 * 1000; // 5 minutes
   const maxDelay = 30 * 60 * 1000; // 30 minutes
-  const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) +
-    minDelay;
+  const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 
   setTimeout(() => {
     sendAutoMessage();
     scheduleNextAutoMessage();
   }, delay);
 
-  console.log(
-    wrapText(
-      `Next auto message in ${(delay / 60000).toFixed(1)} minutes`,
-      "🕥 ",
-    ),
-  );
+  console.log(wrap(`Next auto message in ${(delay / 60000).toFixed(1)} minutes`, "🕥 "));
 }
 
 /**
@@ -819,14 +732,14 @@ function startPingInterval(ws: WebSocket): number {
 
 // Handle graceful shutdown to save memory - Deno style
 globalThis.addEventListener("unload", () => {
-  console.log(wrapText("Saving memory before shutdown...", "💾 "));
+  console.log(wrap("Saving memory before shutdown...", "💾 "));
   // Note: In Deno, we can't use async operations in unload event
   // Memory will be saved periodically instead
 });
 
 // Handle SIGINT for graceful shutdown
 Deno.addSignalListener("SIGINT", async () => {
-  console.log(wrapText("Saving memory before shutdown...", "💾 "));
+  console.log(wrap("Saving memory before shutdown...", "💾 "));
   await saveMemoryToFile();
   Deno.exit(0);
 });
@@ -842,7 +755,7 @@ async function main(): Promise<void> {
   // Start the auto message scheduling
   scheduleNextAutoMessage();
 
-  console.log(wrapText(`${BOT_USERNAME} is running...`, "🤖 "));
+  console.log(wrap(`${BOT_USERNAME} is running...`, "🤖 "));
 }
 
 // Run the main function
