@@ -1,6 +1,7 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 
 import "jsr:@std/dotenv/load";
+import { assert, assertGreater, assertGreaterOrEqual } from "jsr:@std/assert";
 // import * as toml from "jsr:@std/toml/parse";
 
 // const config = toml.parse(await Deno.readTextFile("config.toml"));
@@ -153,7 +154,7 @@ const BASE_URL: string = requireEnvVar("URL");
 const WS_URL: string = requireEnvVar("WS_URL");
 const ACCESS_TOKEN: string = requireEnvVar("TOKEN");
 const CHANNEL_ID: string | undefined = Deno.env.get("CHANNEL");
-const LLM_URLS: string[] = requireEnvVar("LLM_URI").split(",").map((s) => s.trim());
+const LLM_URLS: string[] = requireEnvVar("LLM_URL").split(",").map((s) => s.trim());
 const LLM_KEYS: string[] = requireEnvVar("LLM_KEY").split(",").map((s) => s.trim());
 const LLM_MODELS: string[] = requireEnvVar("LLM_MODEL").split(",").map((s) => s.trim());
 const AUTO_LLM_MODELS: string[] = Deno.env.get("AUTO_LLM_MODEL")
@@ -165,23 +166,24 @@ const BOT_USERNAME: string = requireEnvVar("BOT_USERNAME");
 const SYSTEM_PROMPT: string = requireEnvVar("SYSTEM_PROMPT");
 const SYSTEM_PROMPT_AUTO: string = Deno.env.get("SYSTEM_PROMPT_AUTO") ?? SYSTEM_PROMPT;
 
-// Validate LLM configuration
-if (LLM_URLS.length === 0) {
-  throw new Error("Required environment variable LLM_URL is not set");
-}
-if (LLM_KEYS.length === 0) {
-  throw new Error("Required environment variable LLM_KEY is not set");
-}
-if (LLM_MODELS.length === 0) {
-  throw new Error("Required environment variable LLM_MODEL is not set");
-}
-
 // Memory management
 const conversationMemory: ConversationMemory = {};
 const MAX_MEMORY: number = parseInt(Deno.env.get("MAX_MEMORY") ?? "20");
 
 const autoMemory: string[] = [];
 const MAX_AUTO_MEMORY: number = parseInt(Deno.env.get("MAX_MEMORY") ?? `${MAX_MEMORY}`);
+
+assertGreater(LLM_URLS.length, 0, "At least one LLM URL must be provided");
+assertGreater(LLM_KEYS.length, 0, "At least one LLM key must be provided");
+assertGreater(LLM_MODELS.length, 0, "At least one LLM model must be provided");
+assertGreater(AUTO_LLM_MODELS.length, 0, "At least one auto LLM model must be provided");
+assertGreater(MAX_TOKENS, 0, "Max tokens must be greater than 0");
+assertGreater(BOT_USER_ID.length, 0, "BOT_USER_ID must not be empty");
+assertGreater(BOT_USERNAME.length, 0, "BOT_USERNAME must not be empty");
+assertGreater(SYSTEM_PROMPT.length, 0, "SYSTEM_PROMPT must not be empty");
+assertGreater(SYSTEM_PROMPT_AUTO.length, 0, "SYSTEM_PROMPT_AUTO must not be empty");
+assertGreaterOrEqual(MAX_MEMORY, 0, "MAX_MEMORY must not be negative");
+assertGreaterOrEqual(MAX_AUTO_MEMORY, 0, "MAX_AUTO_MEMORY must not be negative");
 
 /**
  * Function to save conversation memory to file using Deno APIs
@@ -253,26 +255,70 @@ async function loadMemoryFromFile(): Promise<void> {
     console.error(wrap(`Error loading memory from file: ${error instanceof Error ? error.message : error}`, "❌ "));
   }
 }
+/**
+ * Trims conversation memory for a specific key to maintain optimal size
+ * Removes oldest messages when memory exceeds MAX_MEMORY limit
+ * @param key - The conversation key to trim
+ */
+function trimConversationMemory(key: string): void {
+  if (!conversationMemory[key]) {
+    return;
+  }
+
+  const conversation = conversationMemory[key];
+
+  if (conversation.length > MAX_MEMORY) {
+    const messagesToRemove = conversation.length - MAX_MEMORY;
+    conversation.splice(0, messagesToRemove);
+  }
+}
 
 /**
- * Function to add a message to the conversation memory
+ * Function to add a message to the conversation memory with validation and error handling
+ * @param username - The username of the message sender
+ * @param inReplyTo - The ID of the message being replied to
+ * @param message - The message content
+ * @param role - The role of the message sender (default: "user")
  */
 function addToMemory(username: string | null, inReplyTo: string | null, message: string, role = "user"): void {
-  let content = message;
-  if (username) {
-    content = `${username}: ${message}`;
+  // Input validation
+  if (!message || typeof message !== "string" || message.trim().length === 0) {
+    console.warn(wrap("Attempted to add empty or invalid message to memory", "⚠️ "));
+    return;
   }
-  const key = username || inReplyTo || "unknown";
-  if (!conversationMemory[key]) {
-    conversationMemory[key] = [];
-  }
-  conversationMemory[key].push({ role, content });
 
-  // Check if this conversation thread exceeds MAX_MEMORY
-  if (conversationMemory[key].length > MAX_MEMORY) {
-    conversationMemory[key].shift();
+  if (typeof role !== "string" || role.trim().length === 0) {
+    console.warn(wrap(`Invalid role provided: ${role}. Using default 'user'`, "⚠️ "));
+    role = "user";
   }
-  saveMemoryToFile();
+
+  try {
+    let content = message.trim();
+    if (username && username.trim().length > 0) {
+      content = `${username.trim()}: ${content}`;
+    }
+
+    const key = username?.trim() || inReplyTo?.trim() || "unknown";
+
+    // Initialize conversation array if it doesn't exist
+    if (!conversationMemory[key]) {
+      conversationMemory[key] = [];
+    }
+
+    // Add the message to memory
+    conversationMemory[key].push({ role: role.trim(), content });
+
+    // Trim conversation memory to maintain optimal performance and prevent memory bloat
+    trimConversationMemory(key);
+
+    // Save to file (with error handling in saveMemoryToFile)
+    saveMemoryToFile();
+  } catch (error) {
+    console.error(wrap(
+      `Error adding message to memory: ${error instanceof Error ? error.message : error}`,
+      "❌ ",
+    ));
+  }
 }
 
 /**
@@ -571,7 +617,9 @@ function connectWebSocket(): void {
         console.log(wrap(`Fetching reply context for note ${note.replyId}`, "🔍 "));
         replyContext = await fetchNoteById(note.replyId);
         if (replyContext) {
-          console.log(wrap(`Found reply context: ${replyContext.text?.substring(0, 100)}...`, "📄 "));
+          console.log(
+            wrap(`Found reply context: ${replyContext.text?.replace(/\r?\n/g, " ").substring(0, 100)}...`, "📄 "),
+          );
         }
       }
 
