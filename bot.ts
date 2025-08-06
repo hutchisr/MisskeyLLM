@@ -1,10 +1,28 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
-
 import "jsr:@std/dotenv/load";
-import { assert, assertGreater, assertGreaterOrEqual } from "jsr:@std/assert";
-// import * as toml from "jsr:@std/toml/parse";
+import { configure, getAnsiColorFormatter, getConsoleSink, getLogger } from "jsr:@logtape/logtape";
+import { assertGreater, assertGreaterOrEqual } from "jsr:@std/assert";
 
-// const config = toml.parse(await Deno.readTextFile("config.toml"));
+await configure({
+  sinks: {
+    console: getConsoleSink({
+      formatter: getAnsiColorFormatter({
+        level: "ABBR",
+        levelStyle: "bold",
+        timestamp: "rfc3339",
+        format: (values) =>
+          `${values.timestamp ? values.timestamp + " " : ""}${values.level} ${values.category} ${values.message}`,
+      }),
+    }),
+  },
+  loggers: [
+    { category: ["logtape", "meta"], lowestLevel: "warning", sinks: ["console"] },
+    { category: [], lowestLevel: "debug", sinks: ["console"] },
+  ],
+});
+
+// Set up logger
+const logger = getLogger(["misskey-llm", "grok"]);
 
 type Username = string;
 
@@ -81,63 +99,6 @@ type IncomingMessage = {
   };
 };
 
-// Utility functions
-/**
- * Get terminal width with fallback
- */
-function getTerminalWidth(): number {
-  try {
-    const { columns } = Deno.consoleSize();
-    return columns || 80;
-  } catch {
-    return 80; // Default fallback
-  }
-}
-
-/**
- * Word wrap text to fit terminal width
- */
-function wrap(text: string, prefix = "", maxWidth: number | null = null): string {
-  if (!maxWidth) maxWidth = getTerminalWidth();
-  if (!text) return text;
-
-  // Calculate available width after prefix
-  const availableWidth = maxWidth - prefix.length;
-
-  // If text is shorter than available width, return as-is
-  if (text.length <= availableWidth) {
-    return prefix + text;
-  }
-
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let currentLine = "";
-
-  for (const word of words) {
-    // If adding this word would exceed the line length
-    if (currentLine.length + word.length + 1 > availableWidth) {
-      if (currentLine) {
-        lines.push(currentLine);
-        currentLine = word;
-      } else {
-        // Word is longer than available width, break it
-        lines.push(word.substring(0, availableWidth));
-        currentLine = word.substring(availableWidth);
-      }
-    } else {
-      currentLine = currentLine ? currentLine + " " + word : word;
-    }
-  }
-
-  if (currentLine) {
-    lines.push(currentLine);
-  }
-
-  // Join lines with prefix and continuation indent
-  const continuationIndent = " ".repeat(prefix.length);
-  return lines.map((line, index) => index === 0 ? prefix + line : continuationIndent + line).join("\n");
-}
-
 /**
  * Validates that a required environment variable is set
  */
@@ -196,9 +157,9 @@ async function saveMemoryToFile(): Promise<void> {
 
   try {
     await Deno.writeTextFile("memory.json", JSON.stringify(memoryData, null, 2));
-    console.log(wrap("Memory saved to memory.json", "💾 "));
+    logger.info("💾 Memory saved to memory.json");
   } catch (error) {
-    console.error(wrap(`Error saving memory to file: ${error instanceof Error ? error.message : error}`, "❌ "));
+    logger.error(`Error saving memory to file: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -219,11 +180,8 @@ async function loadMemoryFromFile(): Promise<void> {
 
         // If the saved data is a flat array (legacy format), convert it to the new structure
         conversationMemory["general"] = memoryData.conversationMemory as unknown as Message[];
-        console.log(
-          wrap(
-            `Loaded ${(memoryData.conversationMemory as unknown as Message[]).length} conversation memory items`,
-            "💾 ",
-          ),
+        logger.info(
+          `💾 Loaded ${(memoryData.conversationMemory as unknown as Message[]).length} conversation memory items`,
         );
       } else if (typeof memoryData.conversationMemory === "object" && memoryData.conversationMemory !== null) {
         // Clear existing memory
@@ -232,13 +190,10 @@ async function loadMemoryFromFile(): Promise<void> {
         // If the saved data is already in the correct object format, restore it directly
         Object.assign(conversationMemory, memoryData.conversationMemory);
         const totalItems = Object.values(conversationMemory).reduce((sum, arr) => sum + arr.length, 0);
-        console.log(
-          wrap(
-            `Loaded ${totalItems} conversation memory items across ${
-              Object.keys(conversationMemory).length
-            } conversations`,
-            "💾 ",
-          ),
+        logger.info(
+          `💾 Loaded ${totalItems} conversation memory items across ${
+            Object.keys(conversationMemory).length
+          } conversations`,
         );
       }
 
@@ -246,13 +201,13 @@ async function loadMemoryFromFile(): Promise<void> {
       if (Array.isArray(memoryData.autoMemory)) {
         autoMemory.length = 0; // Clear existing memory
         memoryData.autoMemory.forEach((item) => autoMemory.push(item));
-        console.log(wrap(`Loaded ${autoMemory.length} auto memory items`, "💾 "));
+        logger.info(`💾 Loaded ${autoMemory.length} auto memory items`);
       }
     } else {
-      console.log(wrap("No memory file found, starting with empty memory", "💾 "));
+      logger.info("💾 No memory file found, starting with empty memory");
     }
   } catch (error) {
-    console.error(wrap(`Error loading memory from file: ${error instanceof Error ? error.message : error}`, "❌ "));
+    logger.error(`Error loading memory from file: ${error instanceof Error ? error.message : error}`);
   }
 }
 /**
@@ -283,12 +238,12 @@ function trimConversationMemory(key: string): void {
 function addToMemory(username: string | null, inReplyTo: string | null, message: string, role = "user"): void {
   // Input validation
   if (!message || typeof message !== "string" || message.trim().length === 0) {
-    console.warn(wrap("Attempted to add empty or invalid message to memory", "⚠️ "));
+    logger.warn("Attempted to add empty or invalid message to memory");
     return;
   }
 
   if (typeof role !== "string" || role.trim().length === 0) {
-    console.warn(wrap(`Invalid role provided: ${role}. Using default 'user'`, "⚠️ "));
+    logger.warn(`Invalid role provided: ${role}. Using default 'user'`);
     role = "user";
   }
 
@@ -314,10 +269,7 @@ function addToMemory(username: string | null, inReplyTo: string | null, message:
     // Save to file (with error handling in saveMemoryToFile)
     saveMemoryToFile();
   } catch (error) {
-    console.error(wrap(
-      `Error adding message to memory: ${error instanceof Error ? error.message : error}`,
-      "❌ ",
-    ));
+    logger.error(`Error adding message to memory: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -356,13 +308,13 @@ async function sendNoteToChannel(text: string, replyId: string | null = null): P
 
     // Check if the response was successful
     if (response.status === 200 || response.status === 201) {
-      console.log(wrap(text, "📤 Sent: "));
+      logger.info(`📤 Sent: ${text}`);
       addToMemory(null, replyId, text, "assistant");
     } else {
-      console.warn(`Unexpected response status: ${response.status}`);
+      logger.warn(`Unexpected response status: ${response.status}`);
     }
   } catch (error) {
-    console.error(wrap(`Error sending note: ${error instanceof Error ? error.message : error}`, "❌ "));
+    logger.error(`Error sending note: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -383,7 +335,7 @@ async function fetchNoteById(noteId: string): Promise<Note | null> {
     const note = await response.json() as Note;
     return note;
   } catch (error) {
-    console.error(wrap(`Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`, "❌ "));
+    logger.error(`Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`);
     return null;
   }
 }
@@ -410,68 +362,81 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
     });
 
     // Check if the response was successful
-    if (response.status === 200 || response.status === 201) {
+    if (response.ok) {
       const user = getUserFromNote(note);
-      console.log(wrap(text.replace(/\n/g, "\n   "), "💬 Reply: "));
+      logger.info(`💬 Reply: ${text.replace(/\n/g, "\n   ")}`);
       addToMemory(null, user, text, "assistant");
     } else {
-      console.warn(`Unexpected response status: ${response.status}`);
+      throw new Error(`${response.status}: ${response.statusText}`);
     }
   } catch (error) {
-    console.error(wrap(`Error sending reply: ${error instanceof Error ? error.message : error}`, "❌ "));
+    logger.error(`Error sending reply: ${error instanceof Error ? error.message : error}`);
   }
 }
 
 /**
  * Attempts to send requests to configured LLM endpoints with intelligent fallback and load balancing.
  */
-async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false): Promise<LLMResponse> {
+async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<LLMResponse> {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
+  let orderedIndices: number[];
 
   // Create array of indices to try in random order
-  const indices = Array.from({ length: LLM_URLS.length }, (_, i) => i);
-  const startIndex = Math.floor(Math.random() * indices.length);
-  const orderedIndices = [...indices.slice(startIndex), ...indices.slice(0, startIndex)];
+  if (random) {
+    const indices = Array.from({ length: LLM_MODELS.length }, (_, i) => i);
+    const startIndex = Math.floor(Math.random() * indices.length);
+    orderedIndices = [...indices.slice(startIndex), ...indices.slice(0, startIndex)];
+  } else {
+    orderedIndices = Array.from({ length: LLM_MODELS.length }, (_, i) => i);
+  }
 
   for (let j = 0; j < orderedIndices.length; j++) {
     const i = orderedIndices[j];
+    const keyIndex = i % LLM_KEYS.length;
+    const modelIndex = i % models.length;
+    const urlIndex = i % LLM_URLS.length;
+    // Rotate through keys and models with the same logic
+    const endpoint = LLM_URLS[urlIndex] || LLM_URLS[0];
+    const key = LLM_KEYS[keyIndex];
+    const model = models[modelIndex] || payload.model;
+
+    logger.info(`Trying endpoint ${endpoint} with model ${model} and key ${key}...`);
+
+    const headers = {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    };
+    const requestPayload = {
+      ...payload,
+      model,
+      reasoning: { exclude: true, max_tokens: 0 },
+    };
     try {
-      // Rotate through keys and models with the same logic
-      const keyIndex = i % LLM_KEYS.length;
-      const modelIndex = i % models.length;
-      const key = LLM_KEYS[keyIndex];
-      const model = models[modelIndex] || payload.model;
-
-      const headers = {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      };
-      const requestPayload = {
-        ...payload,
-        model,
-        reasoning: { exclude: true, max_tokens: 0 },
-      };
-
-      const response = await fetch(LLM_URLS[i], {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(requestPayload),
       });
 
+      logger.info(`Response status: ${response.status}`);
+
+      if (!response.ok) {
+        continue; // Skip to next endpoint if response is not OK
+      }
+
       const data = await response.json() as LLMResponse;
 
-      console.log(wrap(`Using endpoint: ${LLM_URLS[i]} with model: ${model}`, "\x1b[32m✅ ") + "\x1b[0m");
+      logger.info(`\x1b[32m✅ Using endpoint: ${endpoint} with model: ${model}\x1b[0m`);
       return data;
     } catch (error) {
-      console.error(
-        wrap(`Error with LLM endpoint ${LLM_URLS[i]}: ${error instanceof Error ? error.message : error}`, "❌ "),
-      );
+      logger.error(`Error with LLM endpoint ${endpoint}: ${error instanceof Error ? error.message : error}`);
       if (j === orderedIndices.length - 1) {
         throw error; // Throw error if all endpoints failed
       }
     }
   }
-  console.error(wrap("All LLM endpoints failed. Please check your configuration.", "❌ "));
+  logger.error("All LLM endpoints failed. Please check your configuration.");
   throw new Error("All LLM endpoints failed. Please check your configuration.");
 }
 
@@ -493,13 +458,13 @@ async function processWithAI(
     let prompt = `${SYSTEM_PROMPT}`;
 
     if (quotedMessage) {
-      prompt += `Quoted message: "${quotedMessage}"`;
+      prompt += `\n<quote>${quotedMessage}</quote>`;
     }
 
     // If there's reply context, include it in the prompt
     if (replyContext) {
       const replyUser = getUserFromNote(replyContext);
-      prompt += `Relevant message "${replyUser}: ${replyContext.text}"`;
+      prompt += `\n"<quote>${replyUser}: ${replyContext.text}</quote>"`;
     }
 
     const messages: Message[] = [
@@ -511,7 +476,7 @@ async function processWithAI(
     const response = await tryLLMEndpoints({
       messages,
       max_tokens: MAX_TOKENS,
-      plugins: [{ id: "web" }],
+      // plugins: [{ id: "web" }],
     });
 
     const content = response?.choices?.[0]?.message?.content;
@@ -520,7 +485,7 @@ async function processWithAI(
     }
     return content.trim();
   } catch (error) {
-    console.error(wrap(`Error processing with AI: ${error instanceof Error ? error.message : error}`, "❌ "));
+    logger.error(`Error processing with AI: ${error instanceof Error ? error.message : error}`);
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
   }
 }
@@ -546,7 +511,7 @@ function connectWebSocket(): void {
   ws = new WebSocket(`${WS_URL}/streaming?i=${ACCESS_TOKEN}`);
 
   ws.addEventListener("open", () => {
-    console.log(wrap("Connected to Misskey streaming API", "🌎 "));
+    logger.info("🌎 Connected to Misskey streaming API");
     ws.send(JSON.stringify({
       type: "connect",
       body: {
@@ -602,7 +567,7 @@ function connectWebSocket(): void {
     // Check if the message is NOT from the bot itself to prevent loops
     if ((isReplyToBot || isMentionToBot) && note.userId !== BOT_USER_ID) {
       const user = getUserFromNote(note);
-      console.log(wrap(note.text ?? "", `👤 ${user}: `));
+      logger.info(`👤 ${user}: ${note.text ?? ""}`);
       addToMemory(user, null, note.text ?? "", "user");
 
       let quotedMessage: string | null = null;
@@ -614,12 +579,10 @@ function connectWebSocket(): void {
 
       // If this note is a reply to another note, fetch the full context
       if (note.replyId) {
-        console.log(wrap(`Fetching reply context for note ${note.replyId}`, "🔍 "));
+        logger.info(`🔍 Fetching reply context for note ${note.replyId}`);
         replyContext = await fetchNoteById(note.replyId);
         if (replyContext) {
-          console.log(
-            wrap(`Found reply context: ${replyContext.text?.replace(/\r?\n/g, " ").substring(0, 100)}...`, "📄 "),
-          );
+          logger.info(`📄 Found reply context: ${replyContext.text?.replace(/\r?\n/g, " ").substring(0, 100)}...`);
         }
       }
 
@@ -660,16 +623,16 @@ function connectWebSocket(): void {
         });
       }
     } catch (error) {
-      console.error(wrap(`Error parsing message: ${error instanceof Error ? error.message : error}`, "❌ "));
+      logger.error(`Error parsing message: ${error instanceof Error ? error.message : error}`);
     }
   });
 
   ws.addEventListener("error", (event) => {
-    console.error(wrap(`WebSocket error: ${event}`, "❌ "));
+    logger.error(`WebSocket error: ${JSON.stringify(event)}`);
   });
 
   ws.addEventListener("close", () => {
-    console.log(wrap("Disconnected from Misskey streaming API", "🔌 "));
+    logger.info("🔌 Disconnected from Misskey streaming API");
     clearInterval(pingInterval);
     setTimeout(() => {
       connectWebSocket();
@@ -707,8 +670,8 @@ async function processAutoWithAI(message: string): Promise<string | undefined> {
     }, true);
     return response?.choices?.[0]?.message?.content;
   } catch (error) {
-    console.error(
-      wrap(`Error processing auto message with AI: ${error instanceof Error ? error.message : error}`, "❌ "),
+    logger.error(
+      `Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
     );
     return;
   }
@@ -743,7 +706,7 @@ function scheduleNextAutoMessage(): void {
     scheduleNextAutoMessage();
   }, delay);
 
-  console.log(wrap(`Next auto message in ${(delay / 60000).toFixed(1)} minutes`, "🕥 "));
+  logger.info(`🕥 Next auto message in ${(delay / 60000).toFixed(1)} minutes`);
 }
 
 /**
@@ -765,14 +728,14 @@ function startPingInterval(ws: WebSocket): number {
 
 // Handle graceful shutdown to save memory - Deno style
 globalThis.addEventListener("unload", () => {
-  console.log(wrap("Saving memory before shutdown...", "💾 "));
+  logger.info("💾 Saving memory before shutdown...");
   // Note: In Deno, we can't use async operations in unload event
   // Memory will be saved periodically instead
 });
 
 // Handle SIGINT for graceful shutdown
 Deno.addSignalListener("SIGINT", async () => {
-  console.log(wrap("Saving memory before shutdown...", "💾 "));
+  logger.info("💾 Saving memory before shutdown...");
   await saveMemoryToFile();
   Deno.exit(0);
 });
@@ -788,10 +751,10 @@ async function main(): Promise<void> {
   // Start the auto message scheduling
   scheduleNextAutoMessage();
 
-  console.log(wrap(`${BOT_USERNAME} is running...`, "🤖 "));
+  logger.info(`🤖 ${BOT_USERNAME} is running...`);
 }
 
 // Run the main function
 if (import.meta.main) {
-  main().catch(console.error);
+  main().catch(logger.error);
 }

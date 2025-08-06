@@ -1,13 +1,27 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@logtape/logtape@*": "1.0.4",
+    "jsr:@logtape/logtape@^1.0.4": "1.0.4",
+    "jsr:@logtape/pretty@*": "1.0.4",
     "jsr:@std/assert@*": "1.0.13",
     "jsr:@std/collections@^1.1.1": "1.1.2",
     "jsr:@std/dotenv@*": "0.225.5",
     "jsr:@std/internal@^1.0.6": "1.0.9",
-    "jsr:@std/toml@*": "1.0.8"
+    "jsr:@std/toml@*": "1.0.8",
+    "npm:@types/node@24.0.7": "24.0.7"
   },
   "jsr": {
+    "@logtape/logtape@1.0.4": {
+      "integrity": "6ada87764d995b1033c352a17fd9e20b217f3672083bc2d8debe356eac03fe10"
+    },
+    "@logtape/pretty@1.0.4": {
+      "integrity": "2c131a2135414df79d896ef6943f3643b335fb68e1857985fca89699d7580479",
+      "dependencies": [
+        "jsr:@logtape/logtape@^1.0.4",
+        "npm:@types/node"
+      ]
+    },
     "@std/assert@1.0.13": {
       "integrity": "ae0d31e41919b12c656c742b22522c32fb26ed0cba32975cb0de2a273cb68b29",
       "dependencies": [
@@ -28,6 +42,17 @@
       "dependencies": [
         "jsr:@std/collections"
       ]
+    }
+  },
+  "npm": {
+    "@types/node@24.0.7": {
+      "integrity": "sha512-YIEUUr4yf8q8oQoXPpSlnvKNVKDQlPMWrmOcgzoduo7kvA2UF0/BwJ/eMKFTiTtkNL17I0M6Xe2tvwFU7be6iw==",
+      "dependencies": [
+        "undici-types"
+      ]
+    },
+    "undici-types@7.8.0": {
+      "integrity": "sha512-9UJ2xGDvQ43tYyVMpuHlsgApydB8ZKfVYTsLDhXkFL/6gfkp+U8xTGdh8pMJv1SpZna0zxG1DwsKZsreLbXBxw=="
     }
   }
 }
