@@ -778,14 +778,13 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
 
     const prompt = `${SYSTEM_PROMPT_AUTO}`;
 
-    const response = await tryLLMEndpoints({
+    return await tryLLMEndpoints({
       messages: [
         { role: "system", content: prompt },
         { role: "user", content: message },
       ],
       max_tokens: MAX_TOKENS,
     }, true);
-    return response?.choices?.[0]?.message?.content;
   } catch (error) {
     logger.error(
       `Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
