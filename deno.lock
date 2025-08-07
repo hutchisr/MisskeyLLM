@@ -8,6 +8,7 @@
     "jsr:@logtape/logtape@*": "1.0.4",
     "jsr:@logtape/logtape@^1.0.4": "1.0.4",
     "jsr:@logtape/pretty@*": "1.0.4",
+    "jsr:@logtape/redaction@*": "1.0.4",
     "jsr:@std/assert@*": "1.0.13",
     "jsr:@std/collections@^1.1.1": "1.1.2",
     "jsr:@std/dotenv@*": "0.225.5",
@@ -37,6 +38,12 @@
       "dependencies": [
         "jsr:@logtape/logtape@^1.0.4",
         "npm:@types/node"
+      ]
+    },
+    "@logtape/redaction@1.0.4": {
+      "integrity": "361379adc7915549284494d40305ee6b005ca1b2925932513134bb17f095599b",
+      "dependencies": [
+        "jsr:@logtape/logtape@^1.0.4"
       ]
     },
     "@std/assert@1.0.13": {

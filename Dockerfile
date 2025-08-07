@@ -12,7 +12,7 @@ USER deno
 
 
 # Copy the source code
-COPY bot.ts ./
+COPY bot.ts types.ts ./
 
 RUN deno cache bot.ts
 

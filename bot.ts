@@ -789,7 +789,6 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
     logger.error(
       `Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
     );
-    return;
   }
 }
 
