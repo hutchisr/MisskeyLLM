@@ -480,7 +480,7 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
 }
 
 /**
- * Attempts to send requests to configured LLM endpoints with intelligent fallback and load balancing.
+ * Attempts to send requests to configured LLM endpoints with unintelligent fallback and load balancing.
  */
 async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<LLMResponse> {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
