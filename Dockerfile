@@ -3,6 +3,8 @@ FROM denoland/deno
 
 ENV TINI_SUBREAPER=1
 
+# Make a memory file with owner and group set to deno so the bot can read/write.
+# This will NOT persist if the container is recreated so use redis if you want real persistence.
 RUN install --owner=deno --group=deno /dev/null /memory.json && \
     echo '{}' >/memory.json
 

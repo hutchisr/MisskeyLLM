@@ -1,6 +1,10 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@iuioiua/redis@1.1.9": "1.1.9",
+    "jsr:@joyful/kv-mini-redis@*": "0.0.2",
+    "jsr:@joyful/kv@*": "0.0.11",
+    "jsr:@joyful/kv@^0.0.11": "0.0.11",
     "jsr:@logtape/logtape@*": "1.0.4",
     "jsr:@logtape/logtape@^1.0.4": "1.0.4",
     "jsr:@logtape/pretty@*": "1.0.4",
@@ -12,6 +16,19 @@
     "npm:@types/node@24.0.7": "24.0.7"
   },
   "jsr": {
+    "@iuioiua/redis@1.1.9": {
+      "integrity": "167d9031d0b8cf050d63756cf6b2d59872d9095784b2dff2b8a40adcf744c1e4"
+    },
+    "@joyful/kv@0.0.11": {
+      "integrity": "fc920c28788f23e80a1ef73df189481efac512d5e1f9dccc77b084e480ccdd28"
+    },
+    "@joyful/kv-mini-redis@0.0.2": {
+      "integrity": "75f2487e82452ba2323c181b031093edaf27e37a33f14c43c33db75d536054a1",
+      "dependencies": [
+        "jsr:@iuioiua/redis",
+        "jsr:@joyful/kv@^0.0.11"
+      ]
+    },
     "@logtape/logtape@1.0.4": {
       "integrity": "6ada87764d995b1033c352a17fd9e20b217f3672083bc2d8debe356eac03fe10"
     },
