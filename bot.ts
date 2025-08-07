@@ -482,7 +482,7 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
 /**
  * Attempts to send requests to configured LLM endpoints with unintelligent fallback and load balancing.
  */
-async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<LLMResponse> {
+async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<string> {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
   let orderedIndices: number[];
 
@@ -532,7 +532,12 @@ async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false,
 
       logger.info(`\x1b[32m✅ Using endpoint: ${endpoint} with model: ${model}\x1b[0m`);
 
-      return data;
+      // return data?.choices?.[0]?.message?.content;
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content || content.trim() === "") {
+        throw new Error("AI response is empty or invalid");
+      }
+      return content.trim();
     } catch (error) {
       logger.error(`Error with LLM endpoint ${endpoint}: ${error instanceof Error ? error.message : error}`);
       if (j === orderedIndices.length - 1) {
@@ -577,17 +582,11 @@ async function processWithAI(
       { role: "user", content: `${username}: ${message}` },
     ];
 
-    const response = await tryLLMEndpoints({
+    return await tryLLMEndpoints({
       messages,
       max_tokens: MAX_TOKENS,
       // plugins: [{ id: "web" }],
     });
-
-    const content = response?.choices?.[0]?.message?.content;
-    if (!content || content.trim() === "") {
-      throw new Error("AI response is empty or invalid");
-    }
-    return content.trim();
   } catch (error) {
     logger.error(`Error processing with AI: ${error instanceof Error ? error.message : error}`);
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
