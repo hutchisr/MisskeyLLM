@@ -13,6 +13,7 @@
     "jsr:@std/collections@^1.1.1": "1.1.2",
     "jsr:@std/dotenv@*": "0.225.5",
     "jsr:@std/internal@^1.0.6": "1.0.9",
+    "jsr:@std/regexp@*": "1.0.1",
     "jsr:@std/toml@*": "1.0.8",
     "npm:@types/node@24.0.7": "24.0.7"
   },
@@ -60,6 +61,9 @@
     },
     "@std/internal@1.0.9": {
       "integrity": "bdfb97f83e4db7a13e8faab26fb1958d1b80cc64366501af78a0aee151696eb8"
+    },
+    "@std/regexp@1.0.1": {
+      "integrity": "5179d823465085c5480dafb44438466e83c424fadc61ba31f744050ecc0f596d"
     },
     "@std/toml@1.0.8": {
       "integrity": "eb8ae76b4cc1c6c13f2a91123675823adbec2380de75cd3748c628960d952164",

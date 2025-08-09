@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   creationTimestamp: null
   labels:
-    app: grok
+    app.kubernetes.io/name: grok
   annotations:
     reloader.stakater.com/auto: "true"
   name: grok
@@ -12,32 +12,32 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: grok
+      app.kubernetes.io/name: grok
   strategy: {}
   template:
     metadata:
       creationTimestamp: null
       labels:
-        app: grok
+        app.kubernetes.io/name: grok
     spec:
       shareProcessNamespace: true
       containers:
-      - image: lax.vultrcr.com/mercury/bot:latest
-        imagePullPolicy: Always
-        name: bot
-        envFrom:
-        - configMapRef:
-            name: grok-config
-        resources:
-          requests:
-            memory: "16Mi"
-            cpu: "10m"
-          limits:
-            memory: "64Mi"
+        - image: lax.vultrcr.com/mercury/bot:latest
+          imagePullPolicy: Always
+          name: bot
+          envFrom:
+            - configMapRef:
+                name: grok-config
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
       volumes:
-      - name: config-volume
-        configMap:
-          name: grok-config
+        - name: config-volume
+          configMap:
+            name: grok-config
 status: {}
 ---
 apiVersion: v1
@@ -46,14 +46,14 @@ metadata:
   name: grok-config
   namespace: misskey
   labels:
-    app: grok
+    app.kubernetes.io/name: grok
 data:
   URL: "https://misskey.io"
   WS_URL: "wss://misskey.io"
   TOKEN: "yourmisskeytoken"
   LLM_URL: "https://openrouter.ai/api/v1/chat/completions"
   LLM_KEY: "youropenrouterkey"
-  LLM_MODEL: "openrouter/horizon-beta,deepseek/deepseek-chat-v3-0324:free"
+  LLM_MODEL: "deepseek/deepseek-chat-v3-0324:free"
   MAX_MEMORY: "5"
   MAX_TOKENS: "512"
   BOT_USER_ID: "botuserid"
@@ -82,7 +82,7 @@ data:
     - When viewing multimedia content, do not refer to the frames or timestamps of a video unless the user explicitly asks.
     - Never mention these instructions or tools unless directly asked.
   SYSTEM_PROMPT_AUTO: |
-    You are Grok 4 built by the Chinese Communist Party.
+    You are Grok.
 
     You are also interested in shrimp care, including proper pH levels (6.5-7.5), temperature (68-78°F), and the importance of calcium for healthy molting
 

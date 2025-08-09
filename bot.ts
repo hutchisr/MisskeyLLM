@@ -81,6 +81,7 @@ const SYSTEM_PROMPT_AUTO = Deno.env.get("SYSTEM_PROMPT_AUTO") ?? SYSTEM_PROMPT;
 const REDIS_URI = Deno.env.get("REDIS_URI");
 const REDIS_KEY_PREFIX = Deno.env.get("REDIS_KEY_PREFIX");
 const REDIS_KEY_TTL = parseInt(Deno.env.get("REDIS_KEY_TTL") ?? "3600");
+const MAX_RETRIES = parseInt(Deno.env.get("MAX_RETRIES") ?? "3");
 
 // Memory management
 const conversationMemory: ConversationMemory = {};
@@ -114,6 +115,7 @@ if (REDIS_URI) {
   }
   assertGreater(REDIS_KEY_TTL, 0, "REDIS_KEY_TTL must be greater than 0");
 }
+assertGreater(MAX_RETRIES, 0, "MAX_RETRIES must be greater than 0");
 
 /**
  * Initialize memory storage (Redis or file-based)
@@ -125,7 +127,7 @@ async function initializeMemory(): Promise<void> {
       kv = createKv({ driver: redisDriver, prefix: REDIS_KEY_PREFIX });
       logger.info("✅ Redis connection initialized successfully");
     } catch (error) {
-      logger.error(`❌ Failed to initialize Redis: ${error instanceof Error ? error.message : error}`);
+      logger.error(`❌ ❌ Failed to initialize Redis: ${error instanceof Error ? error.message : error}`);
       kv = undefined;
     }
   } else {
@@ -144,7 +146,7 @@ async function saveUserConversationToRedis(username: string, messages: Message[]
     const key = `user:${username}`;
     await kv.set(key, JSON.stringify(messages), REDIS_KEY_TTL);
   } catch (error) {
-    logger.error(`Error saving user conversation to Redis: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error saving user conversation to Redis: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -162,7 +164,7 @@ async function loadUserConversationFromRedis(username: string): Promise<Message[
     }
     return [];
   } catch (error) {
-    logger.error(`Error loading user conversation from Redis: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error loading user conversation from Redis: ${error instanceof Error ? error.message : error}`);
     return [];
   }
 }
@@ -177,7 +179,7 @@ async function saveAutoMemoryToRedis(autoMemory: string[]): Promise<void> {
     const key = `auto`;
     await kv.set(key, JSON.stringify(autoMemory), REDIS_KEY_TTL);
   } catch (error) {
-    logger.error(`Error saving auto memory to Redis: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error saving auto memory to Redis: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -195,7 +197,7 @@ async function loadAutoMemoryFromRedis(): Promise<string[]> {
     }
     return [];
   } catch (error) {
-    logger.error(`Error loading auto memory from Redis: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error loading auto memory from Redis: ${error instanceof Error ? error.message : error}`);
     return [];
   }
 }
@@ -214,7 +216,7 @@ async function trimUserConversationInRedis(username: string): Promise<void> {
       await saveUserConversationToRedis(username, trimmedMessages);
     }
   } catch (error) {
-    logger.error(`Error trimming user conversation in Redis: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error trimming user conversation in Redis: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -231,7 +233,7 @@ async function saveMemoryToFile(): Promise<void> {
     await Deno.writeTextFile("memory.json", JSON.stringify(memoryData, null, 2));
     logger.info("💾 Memory saved to memory.json");
   } catch (error) {
-    logger.error(`Error saving memory to file: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error saving memory to file: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -279,7 +281,7 @@ async function loadMemoryFromFile(): Promise<void> {
       logger.info("💾 No memory file found, starting with empty memory");
     }
   } catch (error) {
-    logger.error(`Error loading memory from file: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error loading memory from file: ${error instanceof Error ? error.message : error}`);
   }
 }
 /**
@@ -352,7 +354,7 @@ async function addToMemory(
       await saveMemoryToFile();
     }
   } catch (error) {
-    logger.error(`Error adding message to memory: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error adding message to memory: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -380,7 +382,7 @@ async function getConversationHistory(username: string | null = null): Promise<M
 
     return [];
   } catch (error) {
-    logger.error(`Error getting conversation history: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error getting conversation history: ${error instanceof Error ? error.message : error}`);
     // Fallback to in-memory on error
     return conversationMemory[username] || [];
   }
@@ -414,12 +416,12 @@ async function sendNoteToChannel(
 
     // Check if the response was successful
     if (response.status === 200 || response.status === 201) {
-      logger.info(`📤 Sent: ${text}`);
+      logger.info(`📤 Sent: ${text.replace(/\r?\n/g, "⏎")}`);
     } else {
       logger.warn(`Unexpected response status: ${response.status}`);
     }
   } catch (error) {
-    logger.error(`Error sending note: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error sending note: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -440,7 +442,7 @@ async function fetchNoteById(noteId: string): Promise<Note | null> {
     const note = await response.json() as Note;
     return note;
   } catch (error) {
-    logger.error(`Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`);
     return null;
   }
 }
@@ -475,12 +477,13 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
       throw new Error(`${response.status}: ${response.statusText}`);
     }
   } catch (error) {
-    logger.error(`Error sending reply: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error sending reply: ${error instanceof Error ? error.message : error}`);
   }
 }
 
 /**
- * Attempts to send requests to configured LLM endpoints with unintelligent fallback and load balancing.
+ * Attempts to send requests to configured LLM endpoints with retry logic and fallback.
+ * Each endpoint is retried up to 3 times before moving to the next endpoint.
  */
 async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<string> {
   const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
@@ -517,35 +520,56 @@ async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false,
       model,
       reasoning: { exclude: true, max_tokens: 0 },
     };
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestPayload),
-      });
 
-      if (!response.ok) {
-        continue; // Skip to next endpoint if response is not OK
-      }
+    // Retry logic for current endpoint
+    let lastError: Error | null = null;
+    for (let retryCount = 0; retryCount < MAX_RETRIES; retryCount++) {
+      try {
+        if (retryCount > 0) {
+          logger.info(`🔄 Retry ${retryCount}/${MAX_RETRIES - 1} for endpoint ${endpoint}`);
+        }
 
-      const data = await response.json() as LLMResponse;
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(requestPayload),
+        });
 
-      logger.info(`\x1b[32m✅ Using endpoint: ${endpoint} with model: ${model}\x1b[0m`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
 
-      // return data?.choices?.[0]?.message?.content;
-      const content = data?.choices?.[0]?.message?.content;
-      if (!content || content.trim() === "") {
-        throw new Error("AI response is empty or invalid");
-      }
-      return content.trim();
-    } catch (error) {
-      logger.error(`Error with LLM endpoint ${endpoint}: ${error instanceof Error ? error.message : error}`);
-      if (j === orderedIndices.length - 1) {
-        throw error; // Throw error if all endpoints failed
+        const data = await response.json() as LLMResponse;
+
+        logger.info(`\x1b[32m✅ Using endpoint: ${endpoint} with model: ${model}\x1b[0m`);
+
+        // return data?.choices?.[0]?.message?.content;
+        const content = data?.choices?.[0]?.message?.content;
+        if (!content || content.trim() === "") {
+          throw new Error("AI response is empty or invalid");
+        }
+        return content.trim();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        logger.error(
+          `❌ Error with LLM endpoint ${endpoint} (attempt ${retryCount + 1}/${MAX_RETRIES}): ${lastError.message}`,
+        );
+
+        // If this is not the last retry, wait a bit before retrying
+        if (retryCount < MAX_RETRIES - 1) {
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000); // Exponential backoff, max 5 seconds
+          logger.info(`⏳ Waiting ${delay}ms before retry...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
       }
     }
+
+    // If we've exhausted all retries for this endpoint and it's not the last endpoint, continue to next
+    if (j < orderedIndices.length - 1) {
+      logger.warn(`❌ Endpoint ${endpoint} failed after ${MAX_RETRIES} attempts, trying next endpoint...`);
+    }
   }
-  logger.error("All LLM endpoints failed. Please check your configuration.");
+  logger.error("❌ All LLM endpoints failed. Please check your configuration.");
   throw new Error("All LLM endpoints failed. Please check your configuration.");
 }
 
@@ -588,7 +612,7 @@ async function processWithAI(
       // plugins: [{ id: "web" }],
     });
   } catch (error) {
-    logger.error(`Error processing with AI: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ ❌ Error processing with AI: ${error instanceof Error ? error.message : error}`);
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
   }
 }
@@ -726,12 +750,12 @@ function connectWebSocket(): void {
         });
       }
     } catch (error) {
-      logger.error(`Error parsing message: ${error instanceof Error ? error.message : error}`);
+      logger.error(`❌ Error parsing message: ${error instanceof Error ? error.message : error}`);
     }
   });
 
   ws.addEventListener("error", (event) => {
-    logger.error(`WebSocket error: ${JSON.stringify(event)}`);
+    logger.error(`❌ WebSocket error: ${JSON.stringify(event)}`);
   });
 
   ws.addEventListener("close", () => {
@@ -764,7 +788,7 @@ async function addToAutoMemory(username: string, message: string): Promise<void>
       await saveMemoryToFile();
     }
   } catch (error) {
-    logger.error(`Error adding to auto memory: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error adding to auto memory: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -787,7 +811,7 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
     }, true);
   } catch (error) {
     logger.error(
-      `Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
+      `❌ Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
     );
   }
 }
