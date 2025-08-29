@@ -1,7 +1,10 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 // deno-lint-ignore-file no-unused-vars
-import "jsr:@std/dotenv/load";
-import type {
+import { parse as parseYaml } from "jsr:@std/yaml";
+import { parseArgs } from "jsr:@std/cli/parse-args";
+import * as path from "jsr:@std/path";
+import {
+  Config,
   ConversationMemory,
   IncomingMessage,
   LLMRequestPayload,
@@ -51,87 +54,36 @@ await configure({
 // Set up logger
 const logger = getLogger(["misskey-llm", "bot"]);
 
-/**
- * Validates that a required environment variable is set
- */
-function requireEnvVar(name: string): string {
-  const value = Deno.env.get(name);
-  if (!value) {
-    throw new Error(`Required environment variable ${name} is not set`);
-  }
-  return value;
-}
+const args = parseArgs(Deno.args, {
+  string: ["config"],
+  alias: { c: "config" },
+});
 
-// Configuration - Using Deno.env instead of process.env
-const BASE_URL = requireEnvVar("URL");
-const WS_URL = requireEnvVar("WS_URL");
-const ACCESS_TOKEN = requireEnvVar("TOKEN");
-const CHANNEL_ID = Deno.env.get("CHANNEL");
-const LLM_URLS = requireEnvVar("LLM_URL").split(",").map((s) => s.trim());
-const LLM_KEYS = requireEnvVar("LLM_KEY").split(",").map((s) => s.trim());
-const LLM_MODELS = requireEnvVar("LLM_MODEL").split(",").map((s) => s.trim());
-const AUTO_LLM_MODELS = Deno.env.get("AUTO_LLM_MODEL")
-  ? Deno.env.get("AUTO_LLM_MODEL")!.split(",").map((s) => s.trim())
-  : LLM_MODELS;
-const MAX_TOKENS = parseInt(Deno.env.get("MAX_TOKENS") ?? "1000");
-const BOT_USER_ID = requireEnvVar("BOT_USER_ID");
-const BOT_USERNAME = requireEnvVar("BOT_USERNAME");
-const SYSTEM_PROMPT = requireEnvVar("SYSTEM_PROMPT");
-const SYSTEM_PROMPT_AUTO = Deno.env.get("SYSTEM_PROMPT_AUTO") ?? SYSTEM_PROMPT;
-const REDIS_URI = Deno.env.get("REDIS_URI");
-const REDIS_KEY_PREFIX = Deno.env.get("REDIS_KEY_PREFIX");
-const REDIS_KEY_TTL = parseInt(Deno.env.get("REDIS_KEY_TTL") ?? "3600");
-const MAX_RETRIES = parseInt(Deno.env.get("MAX_RETRIES") ?? "3");
+// Load configuration from YAML file
+const input = parseYaml(await Deno.readTextFile(args.config ?? path.join(Deno.cwd(), "config.yaml")));
+const config = Config.parse(input);
 
 // Memory management
 const conversationMemory: ConversationMemory = {};
-const MAX_MEMORY = parseInt(Deno.env.get("MAX_MEMORY") ?? "20");
-
 const autoMemory: string[] = [];
-const MAX_AUTO_MEMORY = parseInt(Deno.env.get("MAX_MEMORY") ?? `${MAX_MEMORY}`);
 
 let kv: Kv<Awaited<ReturnType<typeof createRedisDriver>>> | undefined;
-
-assertGreater(LLM_URLS.length, 0, "At least one LLM URL must be provided");
-assertGreater(LLM_KEYS.length, 0, "At least one LLM key must be provided");
-assertGreater(LLM_MODELS.length, 0, "At least one LLM model must be provided");
-assertGreater(AUTO_LLM_MODELS.length, 0, "At least one auto LLM model must be provided");
-assertGreater(MAX_TOKENS, 0, "Max tokens must be greater than 0");
-assertGreater(BOT_USER_ID.length, 0, "BOT_USER_ID must not be empty");
-assertGreater(BOT_USERNAME.length, 0, "BOT_USERNAME must not be empty");
-assertGreater(SYSTEM_PROMPT.length, 0, "SYSTEM_PROMPT must not be empty");
-assertGreater(SYSTEM_PROMPT_AUTO.length, 0, "SYSTEM_PROMPT_AUTO must not be empty");
-assertGreaterOrEqual(MAX_MEMORY, 0, "MAX_MEMORY must not be negative");
-assertGreaterOrEqual(MAX_AUTO_MEMORY, 0, "MAX_AUTO_MEMORY must not be negative");
-
-if (REDIS_URI) {
-  assertMatch(
-    REDIS_URI,
-    /^(redis|rediss|redis-sentinel):\/\/(?:([^:/@\s]+)(?::([^@\s]*))?@)?([^:/@\s]+|\[[a-fA-F0-9:]+\])(?::(\d+))?(?:\/(\d+))?$/,
-    "REDIS_URI must be a valid Redis URI (redis:// or rediss://)",
-  );
-  if (REDIS_KEY_PREFIX) {
-    assertGreater(REDIS_KEY_PREFIX.length, 0, "REDIS_KEY_PREFIX must not be empty");
-  }
-  assertGreater(REDIS_KEY_TTL, 0, "REDIS_KEY_TTL must be greater than 0");
-}
-assertGreater(MAX_RETRIES, 0, "MAX_RETRIES must be greater than 0");
 
 /**
  * Initialize memory storage (Redis or file-based)
  */
 async function initializeMemory(): Promise<void> {
-  if (REDIS_URI) {
+  if (config.redis_uri) {
     try {
-      const redisDriver = await createRedisDriver(REDIS_URI);
-      kv = createKv({ driver: redisDriver, prefix: REDIS_KEY_PREFIX });
+      const redisDriver = await createRedisDriver(config.redis_uri);
+      kv = createKv({ driver: redisDriver, prefix: config.redis_key_prefix });
       logger.info("✅ Redis connection initialized successfully");
     } catch (error) {
       logger.error(`❌ ❌ Failed to initialize Redis: ${error instanceof Error ? error.message : error}`);
       kv = undefined;
     }
   } else {
-    logger.info("📁 Using file-based memory storage (REDIS_URI not set)");
+    logger.info("📁 Using file-based memory storage (redis_uri not set)");
     await loadMemoryFromFile();
   }
 }
@@ -140,11 +92,11 @@ async function initializeMemory(): Promise<void> {
  * Save user conversation to Redis
  */
 async function saveUserConversationToRedis(username: string, messages: Message[]): Promise<void> {
-  if (!REDIS_URI || !kv) return;
+  if (!config.redis_uri || !kv) return;
 
   try {
     const key = `user:${username}`;
-    await kv.set(key, JSON.stringify(messages), REDIS_KEY_TTL);
+    await kv.set(key, JSON.stringify(messages), config.redis_key_ttl);
   } catch (error) {
     logger.error(`❌ Error saving user conversation to Redis: ${error instanceof Error ? error.message : error}`);
   }
@@ -154,7 +106,7 @@ async function saveUserConversationToRedis(username: string, messages: Message[]
  * Load user conversation from Redis
  */
 async function loadUserConversationFromRedis(username: string): Promise<Message[]> {
-  if (!REDIS_URI || !kv) return [];
+  if (!config.redis_uri || !kv) return [];
 
   try {
     const key = `user:${username}`;
@@ -173,11 +125,11 @@ async function loadUserConversationFromRedis(username: string): Promise<Message[
  * Save auto memory to Redis with TTL
  */
 async function saveAutoMemoryToRedis(autoMemory: string[]): Promise<void> {
-  if (!REDIS_URI || !kv) return;
+  if (!config.redis_uri || !kv) return;
 
   try {
     const key = `auto`;
-    await kv.set(key, JSON.stringify(autoMemory), REDIS_KEY_TTL);
+    await kv.set(key, JSON.stringify(autoMemory), config.redis_key_ttl);
   } catch (error) {
     logger.error(`❌ Error saving auto memory to Redis: ${error instanceof Error ? error.message : error}`);
   }
@@ -187,7 +139,7 @@ async function saveAutoMemoryToRedis(autoMemory: string[]): Promise<void> {
  * Load auto memory from Redis
  */
 async function loadAutoMemoryFromRedis(): Promise<string[]> {
-  if (!REDIS_URI || !kv) return [];
+  if (!config.redis_uri || !kv) return [];
 
   try {
     const key = `auto`;
@@ -206,12 +158,12 @@ async function loadAutoMemoryFromRedis(): Promise<string[]> {
  * Trim user conversation in Redis to maintain MAX_MEMORY limit
  */
 async function trimUserConversationInRedis(username: string): Promise<void> {
-  if (!REDIS_URI || !kv) return;
+  if (!config.redis_uri || !kv) return;
 
   try {
     const messages = await loadUserConversationFromRedis(username);
-    if (messages.length > MAX_MEMORY) {
-      const messagesToRemove = messages.length - MAX_MEMORY;
+    if (messages.length > config.max_memory) {
+      const messagesToRemove = messages.length - config.max_memory;
       const trimmedMessages = messages.slice(messagesToRemove);
       await saveUserConversationToRedis(username, trimmedMessages);
     }
@@ -296,8 +248,8 @@ function trimConversationMemory(key: string): void {
 
   const conversation = conversationMemory[key];
 
-  if (conversation.length > MAX_MEMORY) {
-    const messagesToRemove = conversation.length - MAX_MEMORY;
+  if (conversation.length > config.max_memory) {
+    const messagesToRemove = conversation.length - config.max_memory;
     conversation.splice(0, messagesToRemove);
   }
 }
@@ -310,9 +262,9 @@ function trimConversationMemory(key: string): void {
  * @param role - The role of the message sender (default: "user")
  */
 async function addToMemory(
-  username: string | null,
-  inReplyTo: string | null,
-  message: string,
+  username?: string,
+  inReplyTo?: string,
+  message?: string,
   role = "user",
 ): Promise<void> {
   // Input validation
@@ -346,7 +298,7 @@ async function addToMemory(
     trimConversationMemory(key);
 
     // Save to Redis if available
-    if (REDIS_URI && kv) {
+    if (config.redis_uri && kv) {
       await saveUserConversationToRedis(key, conversationMemory[key]);
       await trimUserConversationInRedis(key);
     } else {
@@ -366,7 +318,7 @@ async function getConversationHistory(username: string | null = null): Promise<M
 
   try {
     // Try Redis first
-    if (REDIS_URI && kv) {
+    if (config.redis_uri && kv) {
       const redisMessages = await loadUserConversationFromRedis(username);
       if (redisMessages.length > 0) {
         // Update in-memory cache
@@ -391,24 +343,26 @@ async function getConversationHistory(username: string | null = null): Promise<M
 /**
  * Function to send a note to the channel using Deno's fetch API
  */
-async function sendNoteToChannel(
+async function sendNote(
   text: string,
-  replyId: string | null = null,
+  replyId?: string,
   isAutoMessage: boolean = false,
 ): Promise<void> {
   try {
-    const payload: Record<string, unknown> = {
-      channelId: CHANNEL_ID,
-      text: text,
+    const payload: Record<string, string> = {
+      text,
     };
     if (replyId) {
       payload.replyId = replyId;
     }
+    if (config.channel) {
+      payload.channelId = config.channel;
+    }
 
-    const response = await fetch(`${BASE_URL}/api/notes/create`, {
+    const response = await fetch(`${config.url}/api/notes/create`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        Authorization: `Bearer ${config.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
@@ -428,12 +382,12 @@ async function sendNoteToChannel(
 /**
  * Function to fetch a note by its ID using Deno's fetch API
  */
-async function fetchNoteById(noteId: string): Promise<Note | null> {
+async function fetchNoteById(noteId: string): Promise<Note | undefined> {
   try {
-    const response = await fetch(`${BASE_URL}/api/notes/show`, {
+    const response = await fetch(`${config.url}/api/notes/show`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        Authorization: `Bearer ${config.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ noteId }),
@@ -443,26 +397,27 @@ async function fetchNoteById(noteId: string): Promise<Note | null> {
     return note;
   } catch (error) {
     logger.error(`❌ Error fetching note ${noteId}: ${error instanceof Error ? error.message : error}`);
-    return null;
   }
 }
 
 /**
  * Function to reply using Deno's fetch API
  */
-async function sendReply(text: string, note: Note, isDirectMessage: boolean): Promise<void> {
+async function sendReply(text: string, note: Note, isDirectMessage: boolean = false): Promise<void> {
   try {
-    const payload = {
-      channelId: CHANNEL_ID,
+    const payload: Record<string, string> = {
       text: text,
       replyId: note.id,
       visibility: isDirectMessage ? "specified" : "home",
     };
+    if (config.channel) {
+      payload.channelId = config.channel;
+    }
 
-    const response = await fetch(`${BASE_URL}/api/notes/create`, {
+    const response = await fetch(`${config.url}/api/notes/create`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        Authorization: `Bearer ${config.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
@@ -472,7 +427,7 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
     if (response.ok) {
       const user = getUserFromNote(note);
       logger.info(`💬 Reply: ${text.replace(/\n/g, "⏎")}`);
-      await addToMemory(null, user, text, "assistant");
+      await addToMemory(undefined, user, text, "assistant");
     } else {
       throw new Error(`${response.status}: ${response.statusText}`);
     }
@@ -486,47 +441,43 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean): Pr
  * Each endpoint is retried up to 3 times before moving to the next endpoint.
  */
 async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<string> {
-  const models = useAutoModel ? AUTO_LLM_MODELS : LLM_MODELS;
-  let orderedIndices: number[];
-
-  // Create array of indices to try in random order
+  // Create array of endpoints to try in random order if requested
+  let endpoints = config.llm_endpoints;
   if (random) {
-    const indices = Array.from({ length: LLM_MODELS.length }, (_, i) => i);
-    const startIndex = Math.floor(Math.random() * indices.length);
-    orderedIndices = [...indices.slice(startIndex), ...indices.slice(0, startIndex)];
-  } else {
-    orderedIndices = Array.from({ length: LLM_MODELS.length }, (_, i) => i);
+    // Shuffle the endpoints array
+    endpoints = shuffleArray(config.llm_endpoints);
   }
 
-  for (let j = 0; j < orderedIndices.length; j++) {
-    const i = orderedIndices[j];
-    const keyIndex = i % LLM_KEYS.length;
-    const modelIndex = i % models.length;
-    const urlIndex = i % LLM_URLS.length;
-    // Rotate through keys and models with the same logic
-    const endpoint = LLM_URLS[urlIndex] || LLM_URLS[0];
-    const key = LLM_KEYS[keyIndex];
-    const model = models[modelIndex] || payload.model;
+  for (const endpointConfig of endpoints) {
+    const endpoint = endpointConfig.url;
+    const key = endpointConfig.key;
+    const model = endpointConfig.model;
 
     logger.info(`🛜 Trying endpoint ${endpoint} with model ${model}...`);
 
-    const headers = {
-      "Authorization": `Bearer ${key}`,
+    const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "Accept": "application/json",
     };
+
+    // Only include Authorization header if key is truthy
+    if (key) {
+      headers["Authorization"] = `Bearer ${key}`;
+    }
     const requestPayload = {
       ...payload,
       model,
-      reasoning: { exclude: true, max_tokens: 0 },
+      // reasoning: { exclude: true, max_tokens: 0 },
     };
+
+    // console.info(`payload: ${JSON.stringify(requestPayload)}\n\nheaders: ${JSON.stringify(headers)}`);
 
     // Retry logic for current endpoint
     let lastError: Error | null = null;
-    for (let retryCount = 0; retryCount < MAX_RETRIES; retryCount++) {
+    for (let retryCount = 0; retryCount < config.max_retries; retryCount++) {
       try {
         if (retryCount > 0) {
-          logger.info(`🔄 Retry ${retryCount}/${MAX_RETRIES - 1} for endpoint ${endpoint}`);
+          logger.info(`🔄 Retry ${retryCount}/${config.max_retries - 1} for endpoint ${endpoint}`);
         }
 
         const response = await fetch(endpoint, {
@@ -552,11 +503,13 @@ async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false,
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         logger.error(
-          `❌ Error with LLM endpoint ${endpoint} (attempt ${retryCount + 1}/${MAX_RETRIES}): ${lastError.message}`,
+          `❌ Error with LLM endpoint ${endpoint} (attempt ${
+            retryCount + 1
+          }/${config.max_retries}): ${lastError.message}`,
         );
 
         // If this is not the last retry, wait a bit before retrying
-        if (retryCount < MAX_RETRIES - 1) {
+        if (retryCount < config.max_retries - 1) {
           const delay = Math.min(1000 * Math.pow(2, retryCount), 5000); // Exponential backoff, max 5 seconds
           logger.info(`⏳ Waiting ${delay}ms before retry...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -565,9 +518,7 @@ async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false,
     }
 
     // If we've exhausted all retries for this endpoint and it's not the last endpoint, continue to next
-    if (j < orderedIndices.length - 1) {
-      logger.warn(`❌ Endpoint ${endpoint} failed after ${MAX_RETRIES} attempts, trying next endpoint...`);
-    }
+    logger.warn(`❌ Endpoint ${endpoint} failed after ${config.max_retries} attempts, trying next endpoint...`);
   }
   logger.error("❌ All LLM endpoints failed. Please check your configuration.");
   throw new Error("All LLM endpoints failed. Please check your configuration.");
@@ -588,7 +539,7 @@ async function processWithAI(
     message = message.replace(/"/g, "'");
 
     const conversationContext = await getConversationHistory(username);
-    let prompt = `${SYSTEM_PROMPT}`;
+    let prompt = `${config.system_prompt}`;
 
     if (quotedMessage) {
       prompt += `\n<quote>${quotedMessage}</quote>`;
@@ -608,7 +559,7 @@ async function processWithAI(
 
     return await tryLLMEndpoints({
       messages,
-      max_tokens: MAX_TOKENS,
+      max_tokens: config.max_tokens,
       // plugins: [{ id: "web" }],
     });
   } catch (error) {
@@ -635,7 +586,7 @@ let ws: WebSocket;
 let pingInterval: number;
 
 function connectWebSocket(): void {
-  ws = new WebSocket(`${WS_URL}/streaming?i=${ACCESS_TOKEN}`);
+  ws = new WebSocket(`${config.ws_url}/streaming?i=${config.token}`);
 
   ws.addEventListener("open", () => {
     logger.info("🌎 Connected to Misskey streaming API");
@@ -688,20 +639,20 @@ function connectWebSocket(): void {
       .replace(/nuke|bomb/gi, "hug") ?? null;
 
     // Check if the note is a reply to the bot or mentions the bot
-    const isReplyToBot = note.reply && note.reply?.userId === BOT_USER_ID;
-    const isMentionToBot = note.text?.includes(`@${BOT_USERNAME}`);
+    const isReplyToBot = note.reply && note.reply?.userId === config.bot_user_id;
+    const isMentionToBot = note.text?.includes(`@${config.bot_username}`);
 
     // Check if the message is NOT from the bot itself to prevent loops
-    if ((isReplyToBot || isMentionToBot) && note.userId !== BOT_USER_ID) {
+    if ((isReplyToBot || isMentionToBot) && note.userId !== config.bot_user_id) {
       const user = getUserFromNote(note);
-      logger.info(`👤 ${user}: ${note.text ?? ""}`);
-      await addToMemory(user, null, note.text ?? "", "user");
+      logger.info(`👤 ${user}: ${note.text}`);
+      await addToMemory(user, undefined, note.text ?? undefined, "user");
 
-      let quotedMessage: string | null = null;
-      let replyContext: Note | null = null;
+      let quotedMessage: string | undefined;
+      let replyContext: Note | undefined;
 
       if (isReplyToBot) {
-        quotedMessage = note.reply?.text || null;
+        quotedMessage = note.reply?.text || undefined;
       }
 
       // If this note is a reply to another note, fetch the full context
@@ -776,12 +727,12 @@ async function addToAutoMemory(username: string, message: string): Promise<void>
 
     // Add to in-memory
     autoMemory.push(autoMessage);
-    if (autoMemory.length > MAX_AUTO_MEMORY) {
+    if (autoMemory.length > config.max_memory) {
       autoMemory.shift();
     }
 
     // Save to Redis if available
-    if (REDIS_URI && kv) {
+    if (config.redis_uri && kv) {
       await saveAutoMemoryToRedis(autoMemory);
     } else {
       // Only save to file if not using Redis
@@ -800,14 +751,14 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
     // Avoid escaping double quotes in the message
     message = message.replace(/"/g, "'");
 
-    const prompt = `${SYSTEM_PROMPT_AUTO}`;
+    const prompt = `${config.system_prompt_auto}`;
 
     return await tryLLMEndpoints({
       messages: [
         { role: "system", content: prompt },
         { role: "user", content: message },
       ],
-      max_tokens: MAX_TOKENS,
+      max_tokens: config.max_tokens,
     }, true);
   } catch (error) {
     logger.error(
@@ -821,7 +772,7 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
  */
 async function sendAutoMessage(): Promise<void> {
   // Load auto memory from Redis if available
-  if (REDIS_URI && kv) {
+  if (config.redis_uri && kv) {
     const redisAutoMemory = await loadAutoMemoryFromRedis();
     if (redisAutoMemory.length > 0) {
       autoMemory.length = 0; // Clear existing memory
@@ -835,10 +786,10 @@ async function sendAutoMessage(): Promise<void> {
 
   // clean up the response: if it starts with "AUTO" or "BOT_USERNAME:", remove it.
   response = response.replace(/^AUTO: /gi, "");
-  response = response.replace(new RegExp(BOT_USERNAME + ": ", "gi"), "");
+  response = response.replace(new RegExp(config.bot_username + ": ", "gi"), "");
 
-  await sendNoteToChannel(response);
-  await addToAutoMemory(BOT_USERNAME, response);
+  await sendNote(response);
+  await addToAutoMemory(config.bot_username, response);
 }
 
 /**
@@ -872,6 +823,15 @@ function startPingInterval(ws: WebSocket): number {
   return pingInterval;
 }
 
+function shuffleArray<T>(array: Array<T>): Array<T> {
+  const shuffled = [...array]; // Create a copy to avoid mutating original
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]; // Swap elements
+  }
+  return shuffled;
+}
+
 // Set up periodic memory saving (every 5 minutes)
 
 // Handle graceful shutdown to save memory - Deno style
@@ -899,7 +859,7 @@ async function main(): Promise<void> {
   // Start the auto message scheduling
   scheduleNextAutoMessage();
 
-  logger.info(`🤖 ${BOT_USERNAME} is running...`);
+  logger.info(`🤖 ${config.bot_username} is running...`);
 }
 
 // Run the main function

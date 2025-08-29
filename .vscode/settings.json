@@ -1,12 +1,5 @@
 {
   "deno.enable": true,
-  "deno.enablePaths": [
-    "bot.ts"
-  ],
-  "deno.config": "./deno.json",
   "deno.lint": true,
   "editor.formatOnSave": true
-  // "[typescript]": {
-  //     "editor.defaultFormatter": "denoland.vscode-deno"
-  // }
 }

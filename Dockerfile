@@ -10,9 +10,8 @@ RUN install --owner=deno --group=deno /dev/null /memory.json && \
 
 USER deno
 
-
 # Copy the source code
-COPY bot.ts types.ts ./
+COPY bot.ts types.ts deno.json deno.lock ./
 
 RUN deno cache bot.ts
 
