@@ -40,6 +40,11 @@ export type LLMRequestPayload = {
   [key: string]: unknown;
 };
 
+export type TryLlmEndpointsOptions = {
+  useAutoModel?: boolean;
+  random?: boolean;
+};
+
 export type LLMResponse = {
   choices?: Array<{ message: Message }>;
   usage?: {

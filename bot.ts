@@ -12,6 +12,7 @@ import {
   MemoryData,
   Message,
   Note,
+  TryLlmEndpointsOptions,
   User,
   Username,
   WebSocketMessage,
@@ -440,7 +441,11 @@ async function sendReply(text: string, note: Note, isDirectMessage: boolean = fa
  * Attempts to send requests to configured LLM endpoints with retry logic and fallback.
  * Each endpoint is retried up to 3 times before moving to the next endpoint.
  */
-async function tryLLMEndpoints(payload: LLMRequestPayload, useAutoModel = false, random = false): Promise<string> {
+async function TryLlmEndpoints(
+  payload: LLMRequestPayload,
+  options: TryLlmEndpointsOptions = {},
+): Promise<string> {
+  const { useAutoModel = false, random = false } = options;
   // Create array of endpoints to try in random order if requested
   let endpoints = config.llm_endpoints;
   if (random) {
@@ -557,11 +562,11 @@ async function processWithAI(
       { role: "user", content: `${username}: ${message}` },
     ];
 
-    return await tryLLMEndpoints({
+    return await TryLlmEndpoints({
       messages,
       max_tokens: config.max_tokens,
       // plugins: [{ id: "web" }],
-    });
+    }, { random: true });
   } catch (error) {
     logger.error(`❌ ❌ Error processing with AI: ${error instanceof Error ? error.message : error}`);
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
@@ -753,13 +758,13 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
 
     const prompt = `${config.system_prompt_auto}`;
 
-    return await tryLLMEndpoints({
+    return await TryLlmEndpoints({
       messages: [
         { role: "system", content: prompt },
         { role: "user", content: message },
       ],
       max_tokens: config.max_tokens,
-    }, true);
+    }, { useAutoModel: true });
   } catch (error) {
     logger.error(
       `❌ Error processing auto message with AI: ${error instanceof Error ? error.message : error}`,
