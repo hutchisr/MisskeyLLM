@@ -1,8 +1,13 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 // deno-lint-ignore-file no-unused-vars
-import { parse as parseYaml } from "jsr:@std/yaml";
+import { createKv, Kv } from "jsr:@joyful/kv";
+import { createRedisDriver } from "jsr:@joyful/kv-mini-redis";
+import { configure, getAnsiColorFormatter, getConsoleSink, getLogger } from "jsr:@logtape/logtape";
+import { JWT_PATTERN, redactByPattern, type RedactionPattern } from "jsr:@logtape/redaction";
 import { parseArgs } from "jsr:@std/cli/parse-args";
 import * as path from "jsr:@std/path";
+import { parse as parseYaml } from "jsr:@std/yaml";
+import { agent, ai, ax, AxFunction, type AxMessage } from "npm:@ax-llm/ax";
 import {
   Config,
   ConversationMemory,
@@ -17,12 +22,6 @@ import {
   Username,
   WebSocketMessage,
 } from "./types.ts";
-import { configure, getAnsiColorFormatter, getConsoleSink, getLogger } from "jsr:@logtape/logtape";
-import { DEFAULT_REDACT_FIELDS, JWT_PATTERN, redactByPattern, type RedactionPattern } from "jsr:@logtape/redaction";
-import { createKv, Kv } from "jsr:@joyful/kv";
-import { createRedisDriver } from "jsr:@joyful/kv-mini-redis";
-import { assertGreater, assertGreaterOrEqual, assertMatch } from "jsr:@std/assert";
-
 const API_TOKEN_PATTERN: RedactionPattern = {
   pattern: /sk-[\p{L},\p{N}\-_\.]+\b/gu,
   replacement: "[REDACTED_API_TOKEN]",
@@ -70,6 +69,51 @@ const autoMemory: string[] = [];
 
 let kv: Kv<Awaited<ReturnType<typeof createRedisDriver>>> | undefined;
 
+const chatBot = agent(
+  `
+    message:string,
+    username:string,
+    context?:string,
+    contextUser?:string ->
+    reply:string,
+`,
+  {
+    name: `misskey_${config.bot_username}`,
+    description: "Misskey interactive chat bot",
+    definition: config.system_prompt,
+    debug: true,
+  },
+);
+
+const functions: AxFunction[] = [];
+
+// Add searxng search function if url is configured
+if (config.searxng_url) {
+  functions.push({
+    name: "searxngSearch",
+    description: "Search the web",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query" },
+      },
+      required: ["query"],
+    },
+    func: async (params: { query: string }) => {
+      logger.info(`🔍 Searching the web for: ${params.query}`);
+      const response = await fetch(`${config.searxng_url}/search?format=json&q=${params.query}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Basic ${btoa(`${config.searxng_user}:${config.searxng_password}`)}`,
+        },
+      });
+
+      const data = await response.json();
+      return `${data.results.map((result: any) => result.content).join("\n\n")}`;
+    },
+  });
+}
 /**
  * Initialize memory storage (Redis or file-based)
  */
@@ -80,7 +124,7 @@ async function initializeMemory(): Promise<void> {
       kv = createKv({ driver: redisDriver, prefix: config.redis_key_prefix });
       logger.info("✅ Redis connection initialized successfully");
     } catch (error) {
-      logger.error(`❌ ❌ Failed to initialize Redis: ${error instanceof Error ? error.message : error}`);
+      logger.error(`❌ Failed to initialize Redis: ${error instanceof Error ? error.message : error}`);
       kv = undefined;
     }
   } else {
@@ -266,7 +310,7 @@ async function addToMemory(
   username?: string,
   inReplyTo?: string,
   message?: string,
-  role = "user",
+  role: "user" | "assistant" = "user",
 ): Promise<void> {
   // Input validation
   if (!message || typeof message !== "string" || message.trim().length === 0) {
@@ -280,10 +324,7 @@ async function addToMemory(
   }
 
   try {
-    let content = message.trim();
-    if (username && username.trim().length > 0) {
-      content = `${username.trim()}: ${content}`;
-    }
+    const content = message.trim();
 
     const key = username?.trim() || inReplyTo?.trim() || "unknown";
 
@@ -293,7 +334,7 @@ async function addToMemory(
     }
 
     // Add the message to in-memory storage
-    conversationMemory[key].push({ role: role.trim(), content });
+    conversationMemory[key].push({ role, content });
 
     // Trim in-memory conversation
     trimConversationMemory(key);
@@ -537,7 +578,7 @@ async function processWithAI(
   message: string | null,
   quotedMessage: string | null = null,
   replyContext: Note | null = null,
-): Promise<string | void> {
+): Promise<string | undefined> {
   if (!message) return;
   try {
     // Avoid escaping double quotes in the message
@@ -557,7 +598,7 @@ async function processWithAI(
     }
 
     const messages: Message[] = [
-      { role: "system", content: prompt },
+      { role: "system" as any, content: prompt },
       ...conversationContext,
       { role: "user", content: `${username}: ${message}` },
     ];
@@ -568,9 +609,69 @@ async function processWithAI(
       // plugins: [{ id: "web" }],
     }, { random: true });
   } catch (error) {
-    logger.error(`❌ ❌ Error processing with AI: ${error instanceof Error ? error.message : error}`);
+    logger.error(`❌ Error processing with AI: ${error instanceof Error ? error.message : error}`);
     return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
   }
+}
+
+async function processWithAx(
+  username: string,
+  message?: string,
+  replyContext?: Note,
+): Promise<string | undefined> {
+  if (!message) return;
+  try {
+    // Avoid escaping double quotes in the message
+    message = message.replace(/"/g, "'");
+
+    const conversationContext = await getConversationHistory(username);
+    const contextUser = replyContext ? getUserFromNote(replyContext) : undefined;
+    const context = replyContext?.text ?? undefined;
+
+    const messages: AxMessage<{ username?: string; message: string; context?: string; contextUser?: string }>[] =
+      conversationContext.map((msg) => ({
+        role: msg.role,
+        values: {
+          username: msg.role === "user" ? username : config.bot_username,
+          message: msg.content,
+        },
+      }));
+
+    messages.push({
+      role: "user",
+      values: {
+        username,
+        message,
+        context: context,
+        contextUser,
+      },
+    });
+
+    for (const llm_endpoint of config.llm_endpoints) {
+      try {
+        const llm = ai({
+          name: "openai",
+          apiURL: llm_endpoint.url,
+          apiKey: llm_endpoint.key ?? "",
+          config: {
+            // deno-lint-ignore no-explicit-any
+            model: llm_endpoint.model as any,
+            maxTokens: config.max_tokens,
+            timeout: 5000,
+          },
+        });
+
+        const response = await chatBot.forward(llm, messages, { functions, functionCall: "auto" });
+
+        return `${response.reply}`;
+      } catch (error) {
+        logger.error(`❌ Error using LLM ${llm_endpoint.url}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+  } catch (error) {
+    logger.error(`❌ Error processing with AI: ${error instanceof Error ? error.message : error}`);
+  }
+  return "I'm sorry but my brain appears to be broken. Please try again later. 💀";
 }
 
 /**
@@ -651,14 +752,8 @@ function connectWebSocket(): void {
     if ((isReplyToBot || isMentionToBot) && note.userId !== config.bot_user_id) {
       const user = getUserFromNote(note);
       logger.info(`👤 ${user}: ${note.text}`);
-      await addToMemory(user, undefined, note.text ?? undefined, "user");
 
-      let quotedMessage: string | undefined;
       let replyContext: Note | undefined;
-
-      if (isReplyToBot) {
-        quotedMessage = note.reply?.text || undefined;
-      }
 
       // If this note is a reply to another note, fetch the full context
       if (note.replyId) {
@@ -670,8 +765,9 @@ function connectWebSocket(): void {
       }
 
       // Process the note with AI
-      const response = await processWithAI(user, note.text, quotedMessage, replyContext);
+      const response = await processWithAx(user, note.text ?? undefined, replyContext);
 
+      await addToMemory(user, undefined, note.text ?? undefined, "user");
       // Check if the original message is a direct message
       const isDirectMessage = note.visibility === "specified";
 
@@ -690,9 +786,10 @@ function connectWebSocket(): void {
       if (message.type === "pong") {
         // received pong
       } else if (
-        message.type === "channel" && message.body && (message.body.type === "mention" || message.body.type === "reply")
+        message.type === "channel" && message.body?.type && message.body.body &&
+        ["reply", "mention"].includes(message.body.type)
       ) {
-        const note = message.body.body!;
+        const note = message.body.body;
         const messageId = note.id;
 
         // Store the message
@@ -760,7 +857,7 @@ async function processAutoWithAI(message: string = "AUTO"): Promise<string | und
 
     return await TryLlmEndpoints({
       messages: [
-        { role: "system", content: prompt },
+        { role: "system" as any, content: prompt },
         { role: "user", content: message },
       ],
       max_tokens: config.max_tokens,

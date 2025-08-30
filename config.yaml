@@ -8,10 +8,10 @@ channel: "channel_id"
 
 # LLM Configuration
 llm_endpoints:
-  - url: "http://127.0.0.1:11434/v1/chat/completions"
+  - url: "http://127.0.0.1:11434/v1"
     key: "ollama"
     model: "mistral-small:latest"
-  - url: "https://openrouter.ai/api/v1/chat/completions"
+  - url: "https://openrouter.ai/api/v1"
     key: "youropenrouterkey"
     model: "deepseek/deepseek-chat-v3-0324:free"
 

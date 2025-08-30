@@ -57,7 +57,7 @@ data:
 
     # LLM Configuration
     llm_endpoints:
-      - url: "https://openrouter.ai/api/v1/chat/completions"
+      - url: "https://openrouter.ai/api/v1"
         key: "youropenrouterkey"
         model: "deepseek/deepseek-chat-v3-0324:free"
 

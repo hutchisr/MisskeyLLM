@@ -3,7 +3,7 @@ import * as z from "jsr:@zod/zod";
 export type Username = string;
 
 export type Message = {
-  role: string;
+  role: "user" | "assistant";
   content: string;
 };
 
@@ -89,6 +89,9 @@ export const Config = z.object({
   redis_key_ttl: z.int().positive("redis_key_ttl must be greater than 0").optional(),
   max_retries: z.int().positive("max_retries must be greater than 0"),
   max_memory: z.int().nonnegative("max_memory must not be negative"),
+  searxng_url: z.url().optional(),
+  searxng_user: z.string().optional(),
+  searxng_password: z.string().optional(),
 }).refine((data) => {
   // Custom validation: if redis_uri is provided, redis_key_ttl must be positive
   if (data.redis_uri && data.redis_key_ttl && data.redis_key_ttl <= 0) {
